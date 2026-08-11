@@ -1,0 +1,581 @@
+/* ==========================================================================
+   Дурак — оформление. Тёмная тема, карты нарисованы на CSS.
+   Никаких внешних файлов: ни шрифтов, ни картинок.
+   ========================================================================== */
+
+:root{
+  --bg:        #0d1117;
+  --panel:     #161c26;
+  --panel-2:   #1d2531;
+  --line:      #2b3542;
+  --text:      #e7edf5;
+  --muted:     #93a1b3;
+  --accent:    #d8a43a;   /* золотой — кнопки и акценты */
+  --accent-2:  #4ea1ff;
+  --danger:    #d9534f;
+  --felt-1:    #1b5e43;   /* сукно стола */
+  --felt-2:    #10412f;
+
+  /* размеры карт: мельче на телефоне, крупнее на большом экране */
+  --cw: clamp(58px, 15.5vw, 84px);          /* карта в руке игрока */
+  --ch: calc(var(--cw) * 1.45);
+  --tw: clamp(46px, 12vw, 66px);            /* карта на столе и у бота */
+  --th: calc(var(--tw) * 1.45);
+  --lift: 0px;
+  --rot: 0deg;
+}
+
+*{ box-sizing:border-box; }
+
+html,body{
+  margin:0; padding:0;
+  min-height:100%;
+  background:var(--bg);
+  color:var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+.hidden{ display:none !important; }
+
+/* ---------- Кнопки ---------- */
+
+.btn{
+  display:block; width:100%;
+  margin:8px 0; padding:13px 16px;
+  font: inherit; font-weight:600; font-size:16px;
+  color:var(--text);
+  background:var(--panel-2);
+  border:1px solid var(--line); border-radius:12px;
+  cursor:pointer;
+  transition: transform .08s, background .15s, border-color .15s;
+}
+.btn:active{ transform: translateY(1px); }
+.btn:disabled{ opacity:.45; cursor:default; }
+.btn:disabled:active{ transform:none; }
+.btn.primary{ background:var(--accent); border-color:#b9862a; color:#241a05; }
+.btn.warn{ background:#7a4a1c; border-color:#8f5a24; }
+.btn.danger{ background:transparent; border-color:#5a2b2a; color:#e08b88; }
+.btn.ghost{ background:transparent; }
+.btn.big{ padding:16px; font-size:18px; }
+.btn.small{ width:auto; margin:0; padding:8px 12px; font-size:14px; border-radius:9px; white-space:nowrap; }
+
+/* ---------- Экраны меню и статистики ---------- */
+
+/* Содержимое центрируем по вертикали, но не через align-items: когда экран ниже
+   содержимого, align-items:center срезает верх и до него не долистать.
+   margin:auto по вертикали центрирует так же, а при нехватке места честно отдаёт прокрутку. */
+.screen.menu, .screen.stats{
+  min-height:100vh; min-height:100dvh;
+  display:flex; justify-content:center;
+  padding:20px;
+}
+.menu-inner{ width:100%; max-width:440px; margin:auto 0; }
+
+.logo{
+  margin:0; font-size:44px; letter-spacing:.02em; text-align:center;
+}
+.logo-suits{ display:block; font-size:20px; margin-top:6px; letter-spacing:.35em; }
+.logo-suits i, .logo-suits b{ color:#e2544f; font-style:normal; font-weight:400; }
+
+.sub{ text-align:center; color:var(--muted); margin:10px 0 20px; }
+
+/* ---------- Выбор числа игроков ---------- */
+
+.players{ margin:0 0 16px; text-align:center; }
+.players-lbl{ display:block; font-size:13px; color:var(--muted); margin-bottom:8px; }
+.seg{
+  display:flex; gap:6px;
+  padding:5px; border-radius:14px;
+  background:var(--panel); border:1px solid var(--line);
+}
+.seg-b{
+  flex:1; padding:11px 0;
+  font:inherit; font-size:17px; font-weight:700;
+  color:var(--muted);
+  background:transparent; border:1px solid transparent; border-radius:10px;
+  cursor:pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.seg-b.on{ background:var(--accent); border-color:#b9862a; color:#241a05; }
+.seg-b:focus-visible{ outline:2px solid var(--accent-2); outline-offset:2px; }
+.players-hint{ margin:8px 0 0; font-size:13px; color:var(--muted); }
+
+.opts{ display:flex; flex-direction:column; gap:10px; }
+
+.opt{
+  display:flex; align-items:flex-start; gap:12px;
+  padding:14px; cursor:pointer;
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+}
+.opt input{ position:absolute; opacity:0; width:0; height:0; }
+.opt .box{
+  flex:none; width:26px; height:26px; margin-top:1px;
+  border:2px solid var(--line); border-radius:8px; background:var(--panel-2);
+  position:relative; transition: all .15s;
+}
+.opt input:checked + .box{ background:var(--accent); border-color:var(--accent); }
+.opt input:checked + .box::after{
+  content:''; position:absolute; left:8px; top:3px;
+  width:6px; height:12px; border:solid #241a05; border-width:0 3px 3px 0;
+  transform: rotate(45deg);
+}
+.opt input:focus-visible + .box{ outline:2px solid var(--accent-2); outline-offset:2px; }
+.opt .txt b{ display:block; font-size:17px; }
+.opt .txt i{ display:block; font-style:normal; font-size:13px; color:var(--muted); margin-top:3px; line-height:1.4; }
+
+.modename{ text-align:center; color:var(--muted); margin:18px 0 14px; font-size:15px; }
+.modename b{ color:var(--text); }
+
+/* ---------- Статистика ---------- */
+
+.stats h2{ text-align:center; margin:0 0 18px; }
+.sechead{
+  margin:18px 0 8px; font-size:13px; font-weight:600;
+  color:var(--muted); text-transform:uppercase; letter-spacing:.05em;
+}
+.sechead:first-of-type{ margin-top:0; }
+.tablewrap{ overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+table{ border-collapse:collapse; width:100%; font-size:14px; white-space:nowrap; }
+th,td{ padding:10px 12px; text-align:center; border-bottom:1px solid var(--line); }
+/* заголовкам и названиям режимов разрешаем перенос — иначе таблица не влезает в телефон */
+th, td:first-child{ white-space:normal; }
+th{ color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+td:first-child, th:first-child{ text-align:left; }
+tbody tr:last-child td{ border-bottom:none; }
+tr.total{ background:var(--panel-2); font-weight:700; }
+.dimmed{ color:var(--muted); font-weight:400; }
+.hint{ color:var(--muted); font-size:13px; text-align:center; margin:14px 0 18px; line-height:1.5; }
+
+/* ---------- Экран игры ---------- */
+
+.screen.game{
+  min-height:100vh; min-height:100dvh;
+  display:flex; flex-direction:column; gap:6px;
+  padding:8px 8px calc(10px + env(safe-area-inset-bottom));
+  max-width:760px; margin:0 auto;
+}
+
+.topbar{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.badge{
+  padding:6px 12px; border-radius:999px; font-size:13px; font-weight:600;
+  background:var(--panel); border:1px solid var(--line); color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+/* ---------- Соперники по краю стола ---------- */
+
+.seats{ display:flex; flex-wrap:wrap; justify-content:center; align-items:stretch; gap:5px; }
+
+/* Стол на двоих — как в первой версии: веер рубашек и подпись под ним */
+.seats.n2 .seat{
+  display:flex; flex-direction:column; align-items:center; gap:4px;
+  padding:0; background:none; border:none;
+}
+/* рубашки соперника показываем не целиком, а «выглядывающими» — экономит высоту экрана */
+.opp-hand{
+  display:flex; justify-content:center; align-items:flex-start;
+  height:calc(var(--th) * .62); overflow:hidden;
+}
+.opp-hand .card{ margin-left:-26px; }
+.opp-hand .card:first-child{ margin-left:0; }
+.opp-info{ font-size:13px; color:var(--muted); }
+
+/* Стол на троих и больше — компактные карточки игроков */
+.seat{
+  flex:1 1 88px; max-width:124px; min-width:78px;
+  padding:5px 6px 4px; text-align:center;
+  background:var(--panel); border:1px solid var(--line); border-radius:11px;
+  transition: border-color .15s, background .15s;
+}
+.s-cards{
+  display:flex; justify-content:center; align-items:center;
+  height:17px; margin-bottom:3px;
+}
+.s-cards i{
+  display:block; width:11px; height:16px; border-radius:2px;
+  background: repeating-linear-gradient(45deg, #2b4a86 0 3px, #24407a 3px 6px);
+  border:1px solid #16264a; box-shadow: inset 0 0 0 1px #e9e6dd;
+  margin-left:-4px;
+}
+.s-cards i:first-child{ margin-left:0; }
+.s-cards i.none{ background:none; border:1px dashed var(--line); box-shadow:none; }
+.s-name{
+  font-size:12.5px; line-height:1.15; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.s-name b{ color:var(--text); font-size:13.5px; }
+.s-role{ font-size:10.5px; line-height:1.3; min-height:14px; color:transparent; }
+
+.seat.atk{ border-color:#8a6a22; background:#231c0e; }
+.seat.atk .s-role{ color:var(--accent); }
+.seat.def{ border-color:#2f5c8f; background:#111d2b; }
+.seat.def .s-role{ color:var(--accent-2); }
+.seat.thr{ border-color:#4a5a2c; }
+.seat.thr .s-role{ color:#a9c46a; }
+.seat.out{ opacity:.42; }
+.seat.out .s-role{ color:var(--muted); }
+.seat.out .s-name{ text-decoration:line-through; }
+.seat.turn{ box-shadow:0 0 0 2px rgba(216,164,58,.55); }
+.seat.def.turn{ box-shadow:0 0 0 2px rgba(78,161,255,.55); }
+
+/* Чем больше народу, тем компактнее карточки — чтобы шестеро влезли в узкий экран */
+.seats.n5 .seat, .seats.n6 .seat{ flex-basis:74px; min-width:66px; padding:4px 4px 3px; }
+/* Пятеро соперников: на узком экране ложатся аккуратно по 3 и 2, на широком — в один ряд */
+.seats.n6 .seat{ flex-grow:0; flex-basis:30%; min-width:0; }
+.seats.n5 .s-name, .seats.n6 .s-name{ font-size:11.5px; }
+.seats.n5 .s-name b, .seats.n6 .s-name b{ font-size:12.5px; }
+.seats.n5 .s-role, .seats.n6 .s-role{ font-size:9.5px; min-height:12px; }
+.seats.n5 .s-cards, .seats.n6 .s-cards{ height:14px; margin-bottom:2px; }
+.seats.n5 .s-cards i, .seats.n6 .s-cards i{ width:9px; height:13px; margin-left:-3px; }
+
+/* Много народу — карты на столе чуть мельче, иначе не хватает высоты экрана.
+   Правило висит на .screen.game, то есть ближе к картам, чем :root, и потому
+   перебивает общие размеры. Значит, его нужно повторять в каждом «низком» медиазапросе
+   ниже — иначе на коротком экране оно вернёт карты обратно к крупным. */
+@media (min-height:621px){
+  .screen.game[data-players="5"], .screen.game[data-players="6"]{
+    --tw: clamp(40px, 10.5vw, 58px);
+  }
+}
+
+/* середина: колода слева, стол справа */
+.middle{
+  flex:1; display:flex; align-items:center; gap:10px;
+  padding:10px 8px; min-height:calc(var(--th) + 40px);
+  background: radial-gradient(120% 100% at 50% 40%, var(--felt-1), var(--felt-2));
+  border:1px solid #0c3627; border-radius:16px;
+  box-shadow: inset 0 2px 22px rgba(0,0,0,.45);
+}
+
+/* колода + козырь + бито */
+.deckbox{ flex:none; display:flex; flex-direction:column; align-items:center; gap:8px; }
+/* Колода: сверху стопка рубашкой вверх, под ней поперёк лежит козырная карта
+   и торчит справа примерно на треть — чтобы был виден её номинал. */
+.deck{ position:relative; width:calc(var(--th) + var(--tw) * .5); height:var(--th); }
+.deck .card{ position:absolute; top:0; }
+/* left = th/2 даёт козырю вылет ровно на (th - tw/2): видно больше половины карты с номиналом */
+.deck .trump-card{ left:calc(var(--th) / 2); transform: rotate(90deg); }
+/* когда в колоде осталась только козырная карта — показываем её ровно, без поворота */
+.deck.last{ width:var(--tw); }
+.deck.last .trump-card{ left:0; transform:none; }
+.deck .back{ left:0; box-shadow:2px 2px 0 rgba(0,0,0,.25), 4px 4px 0 rgba(0,0,0,.18); }
+.deck .cnt{
+  position:absolute; left:4px; bottom:-6px; z-index:5;
+  padding:2px 7px; border-radius:999px; font-size:12px; font-weight:700;
+  background:#0d1117; border:1px solid var(--line); color:var(--text);
+}
+.deck-empty{
+  width:var(--tw); height:var(--th); border-radius:8px;
+  border:2px dashed rgba(255,255,255,.28);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  font-size:calc(var(--tw) * .5); color:#fff;
+}
+.deck-empty small{ font-size:9px; opacity:.7; letter-spacing:.03em; }
+.deck-empty.red-suit{ color:#ff8a84; }
+.pile{ font-size:11px; color:rgba(255,255,255,.75); text-align:center; line-height:1.3; }
+.pile b{ display:block; font-size:14px; color:#fff; }
+
+/* стол: пары атака/защита */
+.table{
+  flex:1; display:flex; flex-wrap:wrap; align-content:center; justify-content:center;
+  gap:10px calc(var(--tw) * .38); min-height:var(--th);
+}
+.table .empty-hint{ color:rgba(255,255,255,.45); font-size:13px; }
+.pair{ position:relative; width:var(--tw); height:var(--th); }
+.pair .card{ position:absolute; left:0; top:0; }
+.pair .card.def{ transform: translate(26%, 15%) rotate(9deg); }
+
+/* строка состояния */
+.status{ text-align:center; min-height:38px; }
+.status-main{ font-size:15px; font-weight:600; }
+.status-log{ font-size:12.5px; color:var(--muted); margin-top:2px; min-height:16px; }
+.status-log .rd{ color:#ff7b74; }
+
+/* кнопки хода */
+.controls{ display:flex; gap:8px; justify-content:center; min-height:46px; }
+.controls .btn{ width:auto; margin:0; min-width:110px; }
+
+/* рука игрока веером */
+.hand{
+  display:flex; justify-content:center; align-items:flex-end;
+  min-height:calc(var(--ch) + 18px); padding-top:14px;
+}
+.hand .card{
+  margin-left: calc(var(--ov, 18px) * -1);
+  transform-origin: 50% 135%;
+  transform: rotate(var(--rot)) translateY(var(--lift));
+  transition: transform .14s ease, filter .14s;
+}
+.hand .card:first-child{ margin-left:0; }
+.hand .card.playable{ cursor:pointer; }
+.hand .card.playable:hover{ --lift:-16px; }
+.hand .card.dim{ filter: brightness(.5) saturate(.5); }
+.hand .card.picked{ --lift:-16px; box-shadow:0 0 0 3px var(--accent-2), 0 6px 14px rgba(0,0,0,.5); }
+
+/* подсветка того, чем можно ходить */
+.hand .card.playable{ box-shadow:0 0 0 2px rgba(216,164,58,.9), 0 4px 12px rgba(0,0,0,.45); }
+.hand .card.playable.tr-mode{ box-shadow:0 0 0 2px var(--accent-2), 0 4px 12px rgba(0,0,0,.45); }
+
+/* ---------- Сама карта ---------- */
+
+.card{
+  width:var(--cw); height:var(--ch);
+  flex:none; position:relative;
+  border-radius: calc(var(--cw) * .11);
+  background: linear-gradient(160deg, #fbfaf6, #ece7db);
+  color:#15181d;
+  border:1px solid #b9b3a4;
+  box-shadow:0 3px 8px rgba(0,0,0,.45);
+  user-select:none; -webkit-user-select:none;
+  font-variant-numeric: tabular-nums;
+  overflow:hidden;
+}
+.card.red{ color:#c4232c; }
+
+.card .c-top, .card .c-bot{
+  position:absolute; line-height:1;
+  font-size: calc(var(--cw) * .26); font-weight:700;
+  display:flex; flex-direction:column; align-items:center;
+}
+.card .c-top{ left: calc(var(--cw) * .07); top: calc(var(--cw) * .06); }
+.card .c-bot{ right: calc(var(--cw) * .07); bottom: calc(var(--cw) * .06); transform: rotate(180deg); }
+.card .c-top i, .card .c-bot i{ font-style:normal; font-size: calc(var(--cw) * .22); margin-top:1px; }
+.card .c-mid{
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size: calc(var(--cw) * .52); line-height:1;
+}
+
+/* карты на столе и у бота мельче — свои размеры */
+.table .card, .opp-hand .card, .deck .card{
+  width:var(--tw); height:var(--th);
+  border-radius: calc(var(--tw) * .11);
+}
+.table .card .c-top, .table .card .c-bot,
+.deck .card .c-top, .deck .card .c-bot{ font-size: calc(var(--tw) * .27); }
+.table .card .c-top i, .table .card .c-bot i,
+.deck .card .c-top i, .deck .card .c-bot i{ font-size: calc(var(--tw) * .23); }
+.table .card .c-mid, .deck .card .c-mid{ font-size: calc(var(--tw) * .52); }
+.table .card .c-top, .deck .card .c-top{ left: calc(var(--tw) * .07); top: calc(var(--tw) * .06); }
+.table .card .c-bot, .deck .card .c-bot{ right: calc(var(--tw) * .07); bottom: calc(var(--tw) * .06); }
+
+/* рубашка */
+.card.back{
+  background:
+    repeating-linear-gradient(45deg,  #2b4a86 0 6px, #24407a 6px 12px),
+    #24407a;
+  border-color:#16264a;
+  box-shadow: inset 0 0 0 3px #e9e6dd, inset 0 0 0 4px #16264a, 0 3px 8px rgba(0,0,0,.45);
+}
+
+/* появление новой карты (без прозрачности — чтобы карта никогда не «просвечивала») */
+@keyframes pop{ from{ transform:scale(.84) translateY(-9px); } }
+.card.fresh{ animation: pop .18s ease-out; }
+.pair .card.def.fresh{ animation:none; }
+
+/* ---------- Итог партии ---------- */
+
+.overlay{
+  position:fixed; inset:0; z-index:50;
+  display:flex; align-items:center; justify-content:center; padding:20px;
+  background:rgba(6,9,13,.82);
+}
+.modal{
+  width:100%; max-width:360px; text-align:center;
+  padding:26px 22px; border-radius:18px;
+  background:var(--panel); border:1px solid var(--line);
+  box-shadow:0 20px 50px rgba(0,0,0,.6);
+}
+.modal-emoji{ font-size:46px; line-height:1; }
+.modal h2{ margin:10px 0 6px; }
+.modal p{ color:var(--muted); margin:0 0 18px; font-size:14px; line-height:1.5; }
+
+/* ==========================================================================
+   Сетевой режим: имя игрока, создание стола, лобби, связь
+   ========================================================================== */
+
+.ctr{ text-align:center; }
+h2.ctr{ margin:0 0 10px; }
+
+/* Поле ввода */
+.field{
+  display:block; width:100%;
+  margin:6px 0 4px; padding:13px 14px;
+  font:inherit; font-size:17px;
+  color:var(--text); background:var(--panel);
+  border:1px solid var(--line); border-radius:12px;
+  -webkit-appearance:none; appearance:none;
+}
+.field::placeholder{ color:#5d6b7d; }
+.field:focus{ outline:none; border-color:var(--accent); }
+.field[readonly]{ color:var(--muted); background:var(--panel-2); }
+.field.mono{
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size:13px; letter-spacing:0;
+}
+
+.err{ min-height:18px; margin:2px 0 8px; font-size:13.5px; color:#e08b88; text-align:center; line-height:1.45; }
+.err.note{ color:var(--muted); }
+.warnhint{ color:#e0b96a; }
+
+/* Кто я — строчка внизу меню */
+.whoami{
+  margin:16px 0 0; text-align:center; font-size:13px; color:var(--muted);
+}
+.whoami b{ color:var(--text); }
+.whoami button{
+  margin-left:8px; padding:0; font:inherit; font-size:13px;
+  color:var(--accent-2); background:none; border:none;
+  text-decoration:underline; cursor:pointer;
+}
+
+/* Вход по коду */
+.joinbox{ margin:18px 0 4px; padding:14px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+.joinbox .players-lbl{ margin-bottom:4px; text-align:left; }
+.joinbox .row{ display:flex; gap:8px; align-items:stretch; }
+.joinbox .row .field{
+  margin:0; flex:1; min-width:0;
+  text-transform:uppercase; letter-spacing:.12em; font-weight:700;
+}
+.joinbox .row .btn{ flex:none; }
+
+/* Код стола в заголовке */
+.code{
+  display:inline-block; padding:2px 10px; border-radius:10px;
+  background:var(--panel-2); border:1px solid var(--line);
+  color:var(--accent); letter-spacing:.16em; font-variant-numeric:tabular-nums;
+}
+
+.linkbox{ margin:14px 0 6px; }
+.linkbox .btn{ margin-top:8px; }
+.linkbox .hint{ margin:8px 0 0; }
+
+/* Список мест за столом */
+.seatlist{
+  margin:14px 0; padding:4px 0;
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+}
+.seat-row{
+  display:flex; align-items:center; gap:10px;
+  padding:11px 14px; border-bottom:1px solid var(--line);
+}
+.seat-row:last-child{ border-bottom:none; }
+.seat-row .num{
+  flex:none; width:24px; height:24px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; font-weight:700; color:var(--muted);
+  background:var(--panel-2); border:1px solid var(--line);
+}
+.seat-row .who{ flex:1; min-width:0; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.seat-row .tag{ flex:none; font-size:12px; color:var(--muted); }
+.seat-row.free .who{ color:var(--muted); }
+.seat-row.me .who b{ color:var(--accent); }
+.seat-row.weak .tag{ color:#e0b96a; }
+.seat-row.lost .tag{ color:#e08b88; }
+
+.botrow{ display:flex; gap:8px; margin:0 0 6px; }
+.botrow .btn{ flex:1; width:auto; margin:0; }
+
+.netmsg{ min-height:20px; margin:6px 0 10px; text-align:center; font-size:14px; color:var(--muted); }
+.netmsg.warn{ color:#e0b96a; }
+.netmsg.bad{ color:#e08b88; }
+
+/* Полоска связи на игровом экране */
+.netbar{
+  display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px;
+  padding:7px 10px; border-radius:11px;
+  font-size:13px; line-height:1.35; text-align:center;
+  background:#2a2113; border:1px solid #5c4a1e; color:#f0cf8a;
+}
+.netbar.bad{ background:#2a1616; border-color:#5c2a28; color:#f0a5a1; }
+.netbar-btns{ display:flex; gap:6px; }
+.netbar .btn{ width:auto; margin:0; padding:6px 10px; font-size:13px; border-radius:9px; }
+
+/* ---------- Очень узкие и низкие экраны ---------- */
+
+/* Узкий телефон: топбар и таблица статистики должны влезать без прокрутки */
+@media (max-width:430px){
+  .btn.small{ padding:7px 9px; font-size:13px; }
+  .badge{ padding:5px 9px; font-size:11.5px; }
+  th,td{ padding:9px 4px; font-size:12px; }
+  th{ font-size:10px; letter-spacing:0; }
+  .screen.stats{ padding:20px 12px; }
+}
+@media (max-width:360px){
+  .opp-hand .card{ margin-left:-30px; }
+  .field{ padding:12px 11px; font-size:16px; }
+  .joinbox{ padding:12px 10px; }
+  .joinbox .row .btn{ padding:8px 10px; }
+  .seat-row{ padding:10px 10px; gap:8px; }
+  .seat-row .who{ font-size:14px; }
+  .seat-row .tag{ font-size:11px; }
+  .code{ padding:2px 8px; letter-spacing:.1em; }
+  .linkbox .field.mono{ font-size:11.5px; padding:11px 9px; }
+  .netbar{ font-size:12px; padding:6px 8px; }
+  .controls .btn{ min-width:0; flex:1; padding:12px 8px; font-size:15px; }
+  th,td{ padding:8px 3px; font-size:11.5px; }
+  th{ font-size:9.5px; }
+  .seats{ gap:4px; }
+  .seat{ flex-basis:76px; min-width:68px; padding:4px 4px 3px; }
+  .seats.n5 .seat{ flex-basis:66px; min-width:60px; }
+  .seats.n6 .seat{ flex-basis:30%; min-width:0; }
+  .seg-b{ font-size:16px; padding:10px 0; }
+}
+/* Совсем узкий экран (320 px): шестеро должны помещаться без прокрутки вбок */
+@media (max-width:330px){
+  .seat{ flex-basis:70px; min-width:62px; }
+  .seats.n5 .seat{ flex-basis:60px; min-width:55px; padding:3px 2px 2px; }
+  .seats.n6 .seat{ flex-basis:30%; min-width:0; padding:3px 2px 2px; }
+  .seats.n5 .s-name, .seats.n6 .s-name{ font-size:10.5px; }
+  .seats.n5 .s-name b, .seats.n6 .s-name b{ font-size:11.5px; }
+  .seats.n5 .s-role, .seats.n6 .s-role{ font-size:9px; }
+}
+@media (max-height:620px){
+  :root{ --cw: clamp(50px, 13vw, 70px); --tw: clamp(40px, 10.5vw, 58px); }
+  .screen.game[data-players="5"], .screen.game[data-players="6"]{ --tw: clamp(36px, 9vw, 50px); }
+  .logo{ font-size:34px; }
+  .sub{ margin-bottom:16px; }
+}
+
+/* Телефон в ландшафте: места по высоте почти нет — ужимаем всё сильно */
+@media (max-height:520px){
+  :root{ --cw: clamp(40px, 8.5vw, 54px); --tw: clamp(32px, 6.5vw, 44px); }
+  .screen.game[data-players="5"], .screen.game[data-players="6"]{ --tw: clamp(30px, 5.5vw, 38px); }
+  .screen.game{ gap:3px; padding:5px 8px calc(5px + env(safe-area-inset-bottom)); }
+  .middle{ min-height:calc(var(--th) + 10px); padding:5px; }
+  .seats{ gap:3px; }
+  .seats.n2 .seat{ gap:2px; }
+  .seat{ padding:3px 5px 2px; }
+  .s-cards{ height:12px; margin-bottom:2px; }
+  .s-role{ min-height:12px; font-size:9.5px; }
+  .hand{ padding-top:6px; }
+  .status{ min-height:30px; }
+  .status-main{ font-size:14px; }
+  .status-log{ font-size:11.5px; }
+  .controls{ min-height:40px; }
+  .controls .btn{ padding:9px 14px; font-size:15px; }
+  .hand{ min-height:calc(var(--ch) + 10px); padding-top:8px; }
+  .btn.small{ padding:6px 10px; font-size:13px; }
+  .badge{ padding:4px 10px; font-size:12px; }
+  .opp-info{ font-size:12px; }
+}
+
+/* Совсем низкий экран (телефон в ландшафте, ~380 px и ниже): режем всё ещё сильнее,
+   иначе игровой экран не влезает по высоте */
+@media (max-height:430px){
+  :root{ --cw: clamp(36px, 7.5vw, 46px); --tw: clamp(28px, 6vw, 38px); }
+  .screen.game[data-players="5"], .screen.game[data-players="6"]{ --tw: clamp(26px, 5vw, 33px); }
+  .seats.n2 .opp-hand{ height:calc(var(--th) * .45); }
+  .opp-info{ font-size:11px; }
+  .hand{ min-height:calc(var(--ch) + 6px); padding-top:6px; }
+  .status{ min-height:26px; }
+  .controls{ min-height:36px; }
+  .controls .btn{ padding:8px 12px; font-size:14px; }
+  /* «Бито» уводим вбок от колоды: по ширине в ландшафте места полно, а по высоте нет */
+  .deckbox{ flex-direction:row; gap:6px; }
+  /* и соперников выстраиваем в один ряд — по ширине они помещаются, второй ряд не нужен */
+  .seats.n6 .seat{ flex:1 1 70px; min-width:62px; }
+  .s-role{ min-height:11px; }
+}

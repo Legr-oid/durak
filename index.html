@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Дурак — от двух до шести игроков</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230d1117'/%3E%3Ctext x='32' y='47' font-size='42' text-anchor='middle' fill='%23d8a43a'%3E%E2%99%A0%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ===== ЭКРАН 1: МЕНЮ ===== -->
+<section id="scr-menu" class="screen menu">
+  <div class="menu-inner">
+    <h1 class="logo">Дурак<span class="logo-suits">♠︎<i>♥︎</i>♦︎<b>♣︎</b></span></h1>
+    <p class="sub" id="sub">Ты против бота. Русская колода, 36 карт.</p>
+
+    <div class="players">
+      <span class="players-lbl">Игроков за столом</span>
+      <div class="seg" id="seg-players">
+        <button type="button" class="seg-b" data-n="2">2</button>
+        <button type="button" class="seg-b" data-n="3">3</button>
+        <button type="button" class="seg-b" data-n="4">4</button>
+        <button type="button" class="seg-b" data-n="5">5</button>
+        <button type="button" class="seg-b" data-n="6">6</button>
+      </div>
+      <p class="players-hint" id="players-hint">Ты и один бот</p>
+    </div>
+
+    <div class="opts">
+      <label class="opt">
+        <input type="checkbox" id="opt-pod">
+        <span class="box" aria-hidden="true"></span>
+        <span class="txt">
+          <b>Подкидной</b>
+          <i>Подкидывать карты тех достоинств, что уже лежат на столе, может каждый — кроме того, кто отбивается</i>
+        </span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="opt-per">
+        <span class="box" aria-hidden="true"></span>
+        <span class="txt">
+          <b>Переводной</b>
+          <i>Пока не отбита ни одна карта, ход можно перевести на следующего по кругу</i>
+        </span>
+      </label>
+    </div>
+
+    <p class="modename">Режим: <b id="mode-name">Подкидной</b></p>
+
+    <button class="btn primary big" id="btn-play">Играть с ботами</button>
+    <button class="btn big" id="btn-friends">Играть с друзьями</button>
+    <button class="btn ghost" id="btn-stats">Статистика</button>
+
+    <p class="whoami" id="whoami"></p>
+  </div>
+</section>
+
+<!-- ===== ЭКРАН: ИМЯ ИГРОКА ===== -->
+<section id="scr-nick" class="screen menu hidden">
+  <div class="menu-inner">
+    <h2 class="ctr">Как тебя зовут?</h2>
+    <p class="hint">Это имя увидят те, с кем будешь играть. От 2 до 20 символов.</p>
+    <input class="field" id="nick-input" type="text" maxlength="20" placeholder="Например, Лёша"
+           autocomplete="off" autocorrect="off" spellcheck="false">
+    <p class="err" id="nick-err"></p>
+    <button class="btn primary big" id="nick-ok">Сохранить</button>
+    <button class="btn ghost hidden" id="nick-cancel">Отмена</button>
+  </div>
+</section>
+
+<!-- ===== ЭКРАН: ИГРА С ДРУЗЬЯМИ ===== -->
+<section id="scr-friends" class="screen menu hidden">
+  <div class="menu-inner">
+    <h2 class="ctr">Игра с друзьями</h2>
+    <p class="sub">Создай стол и отправь ссылку — друзья зайдут по ней прямо к тебе.
+      Начнёшь, когда все соберутся: до шести человек за столом.</p>
+
+    <div class="opts">
+      <label class="opt">
+        <input type="checkbox" id="fr-pod">
+        <span class="box" aria-hidden="true"></span>
+        <span class="txt"><b>Подкидной</b><i>Подкидывать может каждый, кроме того, кто отбивается</i></span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="fr-per">
+        <span class="box" aria-hidden="true"></span>
+        <span class="txt"><b>Переводной</b><i>Пока не отбита ни одна карта, ход можно перевести дальше</i></span>
+      </label>
+    </div>
+
+    <p class="modename">Режим: <b id="fr-mode">Подкидной</b></p>
+
+    <button class="btn primary big" id="fr-create">Создать стол</button>
+
+    <div class="joinbox">
+      <span class="players-lbl">Друг прислал код стола?</span>
+      <div class="row">
+        <input class="field" id="fr-code" type="text" maxlength="8" placeholder="K7QX2"
+               autocomplete="off" autocorrect="off" spellcheck="false">
+        <button class="btn small primary" id="fr-join">Войти</button>
+      </div>
+    </div>
+
+    <p class="err" id="fr-err"></p>
+    <button class="btn ghost" id="fr-back">← Назад в меню</button>
+  </div>
+</section>
+
+<!-- ===== ЭКРАН: ЛОББИ СТОЛА ===== -->
+<section id="scr-lobby" class="screen menu hidden">
+  <div class="menu-inner">
+    <h2 class="ctr">Стол <span class="code" id="lb-code">—</span></h2>
+    <p class="hint" id="lb-mode">—</p>
+
+    <div class="linkbox" id="lb-linkbox">
+      <input class="field mono" id="lb-link" type="text" readonly>
+      <button class="btn primary" id="lb-copy">Скопировать ссылку</button>
+      <p class="hint" id="lb-copyhint">Отправь ссылку друзьям — она откроет игру сразу за твоим столом.</p>
+    </div>
+
+    <p class="hint warnhint hidden" id="lb-filenote">Игра открыта файлом с диска, поэтому ссылка-приглашение
+      у друзей не сработает. Продиктуй им код стола — он сработает, если игра есть и у них.
+      Чтобы приглашать ссылкой, выложи игру на GitHub Pages: как — написано в README.</p>
+
+    <div class="seatlist" id="lb-seats"></div>
+
+    <div class="botrow hidden" id="lb-botrow">
+      <button class="btn small" id="lb-bot-add">+ Добавить бота</button>
+      <button class="btn small ghost" id="lb-bot-del">− Убрать бота</button>
+    </div>
+
+    <p class="netmsg" id="lb-msg"></p>
+    <button class="btn primary big" id="lb-start">Начать партию</button>
+    <button class="btn ghost" id="lb-leave">Выйти из стола</button>
+  </div>
+</section>
+
+<!-- ===== ЭКРАН: СТАТИСТИКА ===== -->
+<section id="scr-stats" class="screen stats hidden">
+  <div class="menu-inner">
+    <h2>Статистика</h2>
+
+    <h3 class="sechead">По режимам</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Режим</th><th>Игр</th><th>Побед</th><th>Пораж.</th><th>Ничьи</th><th>Серия</th></tr>
+        </thead>
+        <tbody id="stats-body"></tbody>
+      </table>
+    </div>
+
+    <h3 class="sechead">По числу игроков</h3>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Игроков</th><th>Игр</th><th>Побед</th><th>Пораж.</th><th>Ничьи</th><th>Серия</th></tr>
+        </thead>
+        <tbody id="stats-players-body"></tbody>
+      </table>
+    </div>
+
+    <p class="hint" id="stats-hint"></p>
+    <button class="btn ghost" id="btn-back">← Назад в меню</button>
+    <button class="btn danger" id="btn-reset">Сбросить статистику</button>
+  </div>
+</section>
+
+<!-- ===== ЭКРАН: ИГРА ===== -->
+<section id="scr-game" class="screen game hidden" data-players="2">
+
+  <div class="topbar">
+    <button class="btn small ghost" id="btn-menu">← Меню</button>
+    <span class="badge" id="game-mode">Подкидной</span>
+    <button class="btn small ghost" id="btn-new">Новая партия</button>
+  </div>
+
+  <!-- строка о связи: видна только в сетевой игре и только когда есть что сказать -->
+  <div class="netbar hidden" id="netbar">
+    <span id="netbar-txt"></span>
+    <span class="netbar-btns" id="netbar-btns"></span>
+  </div>
+
+  <!-- соперники по краю стола -->
+  <div class="seats n2" id="seats"></div>
+
+  <!-- колода, козырь, бито и стол -->
+  <div class="middle">
+    <div class="deckbox" id="deckbox"></div>
+    <div class="table" id="table"></div>
+  </div>
+
+  <!-- подсказка и кнопки -->
+  <div class="status">
+    <div class="status-main" id="status-main">—</div>
+    <div class="status-log" id="status-log"></div>
+  </div>
+  <div class="controls" id="controls"></div>
+
+  <!-- рука игрока -->
+  <div class="hand" id="hand"></div>
+</section>
+
+<!-- ===== ИТОГ ПАРТИИ ===== -->
+<div class="overlay hidden" id="overlay">
+  <div class="modal">
+    <div class="modal-emoji" id="ov-emoji">🏆</div>
+    <h2 id="ov-title">Победа</h2>
+    <p id="ov-text"></p>
+    <button class="btn primary" id="ov-again">Ещё партия</button>
+    <button class="btn ghost" id="ov-menu">В меню</button>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="supabase.js"></script>
+<script src="game.js"></script>
+<script src="net.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
