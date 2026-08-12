@@ -39,6 +39,22 @@ var Durak = (function () {
   var MIN_PLAYERS = 2;
   var MAX_PLAYERS = 6;    // 6 × 6 карт = вся колода, больше физически некуда
 
+  // Уровень игры бота. Лежит в состоянии партии (st.opts.diff), поэтому
+  // переживает сериализацию и одинаков у хоста и у гостей в сетевой игре.
+  // Отдельному месту можно задать свой уровень (seats[i].diff) — так за одним
+  // столом собирается смешанный состав.
+  var DIFF_EASY = 0, DIFF_MED = 1, DIFF_HARD = 2;
+  var DIFF_NAME = { 0: 'Лёгкий', 1: 'Средний', 2: 'Сложный' };
+  var DIFF_ALIAS = { easy: 0, med: 1, medium: 1, hard: 2, 'лёгкий': 0, 'средний': 1, 'сложный': 2 };
+
+  function normDiff(v) {
+    if (v === 0 || v === 1 || v === 2) return v;
+    if (typeof v === 'string' && DIFF_ALIAS[v] !== undefined) return DIFF_ALIAS[v];
+    var n = +v;
+    if (n === 0 || n === 1 || n === 2) return n;
+    return DIFF_MED;                                 // всё непонятное — средний
+  }
+
   // Имена ботов для стола на 3+ игроков. Для стола на двоих соперник зовётся «Бот» —
   // так же, как в первой версии игры.
   var BOT_NAMES = ['Пётр', 'Анна', 'Игорь', 'Лиза', 'Марк'];
@@ -145,6 +161,38 @@ var Durak = (function () {
     return -1;
   }
 
+  /* ---------- Что видно всем за столом ---------- */
+  /*
+   * Две записи, которые ведёт сам движок: какие карты ушли в бито (st.gone)
+   * и какие карты игрок на глазах у всех забрал себе со стола (st.held[p]).
+   *
+   * Это НЕ подглядывание в чужие руки: человек, сидящий за столом, видит ровно
+   * то же самое — карту клали на стол в открытую, и было видно, кто её забрал.
+   * Пользуется этой памятью только сложный бот; остальные уровни в неё не
+   * заглядывают и играют «на глазок».
+   */
+
+  function memPlay(st, p, card) {                    // карта ушла из руки на стол
+    var a = st.held && st.held[p];
+    if (!a) return;
+    var i = a.indexOf(card.id);
+    if (i >= 0) a.splice(i, 1);
+  }
+
+  function memTake(st, p, cards) {                   // игрок забрал стол себе
+    var a = st.held && st.held[p], i;
+    if (!a) return;
+    for (i = 0; i < cards.length; i++) a.push(cards[i].id);
+  }
+
+  function memBeaten(st) {                           // стол ушёл в бито
+    if (!st.gone) return;
+    for (var i = 0; i < st.table.length; i++) {
+      st.gone.push(st.table[i].a.id);
+      if (st.table[i].d) st.gone.push(st.table[i].d.id);
+    }
+  }
+
   /* ---------- Круг игроков ---------- */
 
   // Следующий живой по кругу после p (сам p не считается)
@@ -228,6 +276,7 @@ var Durak = (function () {
       if (s.kind) base[i].kind = String(s.kind);
       if (s.g) base[i].g = (s.g === 'f' ? 'f' : 'm');
       if (s.id !== undefined && s.id !== null) base[i].id = String(s.id);  // для сети: кто это на сервере
+      if (s.diff !== undefined && s.diff !== null) base[i].diff = normDiff(s.diff);  // свой уровень у места
     }
     return base;
   }
@@ -237,7 +286,10 @@ var Durak = (function () {
   function create(opts) {
     opts = opts || {};
     var n = Math.max(MIN_PLAYERS, Math.min(MAX_PLAYERS, opts.players || 2));
-    var o = { podkidnoy: !!opts.podkidnoy, perevodnoy: !!opts.perevodnoy, players: n };
+    var o = {
+      podkidnoy: !!opts.podkidnoy, perevodnoy: !!opts.perevodnoy, players: n,
+      diff: normDiff(opts.diff)                     // уровень ботов за этим столом
+    };
     var seed = (typeof opts.seed === 'number' && isFinite(opts.seed))
       ? (opts.seed >>> 0)
       : ((Math.random() * 4294967296) >>> 0);
@@ -247,8 +299,10 @@ var Durak = (function () {
     var bottom = deck[deck.length - 1];             // козырь определяет нижняя карта колоды
     var trumpCard = { r: bottom.r, s: bottom.s, id: bottom.id };
 
-    var hands = [], out = [], passed = [], i;
-    for (i = 0; i < n; i++) { hands.push(deck.splice(0, HAND_SIZE)); out.push(false); passed.push(false); }
+    var hands = [], out = [], passed = [], held = [], i;
+    for (i = 0; i < n; i++) {
+      hands.push(deck.splice(0, HAND_SIZE)); out.push(false); passed.push(false); held.push([]);
+    }
 
     var st = {
       v: 2,
@@ -263,6 +317,9 @@ var Durak = (function () {
       hands: hands,
       table: [],                                    // [{a: карта атаки, d: карта защиты или null}]
       discard: 0,                                   // сколько карт ушло в бито
+      // Открытая память стола — то, что видел каждый сидящий (см. раздел «Что видно всем»)
+      gone: [],                                     // id карт, ушедших в бито
+      held: held,                                   // id карт, которые игрок на глазах у всех забрал себе
       attacker: 0,
       defender: 1,
       thrower: 0,                                   // кто сейчас подкидывает (или основной атакующий)
@@ -438,6 +495,7 @@ var Durak = (function () {
 
     var first = st.table.length === 0;
     var card = hand.splice(i, 1)[0];
+    memPlay(st, p, card);
     st.table.push({ a: card, d: null });
     say(st, nm(st, p) + ' ' + (first ? vb(st, p, 'enter') + ' ' + ins(card)
                                      : vb(st, p, 'add') + ' ' + acc(card)));
@@ -464,6 +522,7 @@ var Durak = (function () {
     if (!beats(hand[i], st.table[idx].a, st.trump)) return false;
 
     var card = hand.splice(i, 1)[0];
+    memPlay(st, p, card);
     st.table[idx].d = card;
     st.beaten = true;
     say(st, nm(st, p) + ' ' + vb(st, p, 'beat') + ' ' + ins(card));
@@ -485,6 +544,7 @@ var Durak = (function () {
 
     var target = transferTarget(st);
     var card = hand.splice(i, 1)[0];
+    memPlay(st, p, card);
     st.table.push({ a: card, d: null });
     st.attacker = p;                                    // переведший становится атакующим
     st.defender = target;                               // отбивается следующий по кругу
@@ -550,9 +610,11 @@ var Durak = (function () {
         if (st.table[i].d) got.push(st.table[i].d);
       }
       for (i = 0; i < got.length; i++) st.hands[def].push(got[i]);
+      memTake(st, def, got);
       say(st, nm(st, def) + ' ' + vb(st, def, 'took') + ' ' + got.length + ' ' +
         plural(got.length, 'карту', 'карты', 'карт'));
     } else {
+      memBeaten(st);
       st.discard += tableCardCount(st);
       say(st, 'Бито');
     }
@@ -561,14 +623,15 @@ var Durak = (function () {
     st.beaten = false;
 
     // Добор: сначала основной атакующий, дальше по кругу, защищающийся — последним
+    var deckBefore = st.deck.length;
     var order = drawOrder(st, att, def);
     for (i = 0; i < order.length; i++) draw(st, order[i]);
 
     var gone = markOut(st);
 
-    // Раунд «вхолостую»: колода пуста, в бито ничего не ушло — карты просто
-    // перекладываются из рук в руки. Считаем такие раунды подряд.
-    if (st.deck.length === 0 && taken) st.idle++; else st.idle = 0;
+    // Раунд «вхолостую»: в бито ничего не ушло и колода не убыла — карты просто
+    // переложились из рук в руки, партия не сдвинулась. Считаем такие раунды подряд.
+    if (taken && st.deck.length === deckBefore) st.idle++; else st.idle = 0;
 
     // Отбился — атакует он же. Взял — атака переходит к следующему за взявшим.
     st.attacker = taken ? aliveFrom(st, (def + 1) % n) : aliveFrom(st, def);
@@ -590,17 +653,23 @@ var Durak = (function () {
 
   /* ---------- Тупик ---------- */
   /*
-   * За столом от трёх игроков возможна вечная партия: колода пуста, и ни одна
-   * оставшаяся карта не бьёт ни одну другую. Тогда каждый раунд защищающийся
-   * забирает карту, круг замыкается, и так до бесконечности. Такую партию
-   * закрываем ничьей.
+   * Вечная партия возможна в двух видах.
    *
-   * За столом на двоих этого не бывает: после «взял» атакует тот же игрок и
-   * теряет по карте за раунд, так что партия всегда доигрывается. Поэтому на
-   * двоих правило не включается вовсе — игра на двоих идёт ровно как раньше.
+   * 1. Мёртвый расклад (от трёх игроков): колода пуста, и ни одна оставшаяся
+   *    карта не бьёт ни одну другую. Каждый раунд защищающийся забирает карту,
+   *    круг замыкается, и так до бесконечности.
+   *
+   * 2. Карты пошли по кругу: раунд за раундом ничего не уходит в бито и колода
+   *    не убывает — соперники просто перекладывают одни и те же карты. Это
+   *    возможно и за столом на двоих: в переводном режиме двое могут вечно
+   *    перекидывать друг другу одно и то же достоинство (найдено автотестом
+   *    12.08.2026 на 12 800 партиях). Раньше страховка на двоих не работала,
+   *    потому что считала только раунды при пустой колоде.
+   *
+   * И то и другое закрываем ничьей.
    */
 
-  var IDLE_LIMIT = 40;   // страховка: столько холостых раундов подряд — тоже ничья
+  var IDLE_LIMIT = 40;   // столько холостых раундов подряд — карты пошли по кругу
 
   function noBeatsPossible(st) {
     var cards = [], p, i, j;
@@ -617,10 +686,13 @@ var Durak = (function () {
   }
 
   function stalemate(st) {
-    if (st.opts.players <= 2) return false;
-    if (st.deck.length > 0) return false;
-    var dead = noBeatsPossible(st);
-    if (!dead && st.idle < IDLE_LIMIT) return false;
+    var dead = false;
+    if (st.idle < IDLE_LIMIT) {
+      if (st.opts.players <= 2) return false;
+      if (st.deck.length > 0) return false;
+      dead = noBeatsPossible(st);
+      if (!dead) return false;
+    }
 
     st.over = true;
     st.phase = 'over';
@@ -643,7 +715,10 @@ var Durak = (function () {
 
   function draw(st, p) {
     while (st.hands[p].length < HAND_SIZE && st.deck.length > 0) {
-      st.hands[p].push(st.deck.shift());
+      var c = st.deck.shift();
+      // Последняя карта колоды — открытый козырь: все видят, кому он достался
+      if (st.deck.length === 0 && st.held && st.held[p]) st.held[p].push(c.id);
+      st.hands[p].push(c);
     }
   }
 
@@ -758,12 +833,294 @@ var Durak = (function () {
     return res;
   }
 
-  /* ---------- Бот ---------- */
+  /* ======================================================================
+     БОТ
+     ======================================================================
+
+     Три уровня игры. Рамка у всех одна: бот перебирает свои возможные ходы,
+     оценивает каждый в условных очках и берёт лучший. Отличаются уровни тем,
+     ЧТО бот видит и насколько аккуратно считает:
+
+       0 «Лёгкий»  — короткая эвристика первой версии игры плюс живые ошибки.
+                     Играет разумно, но карт не считает, за столом смотрит
+                     только на того, кто отбивается, и иногда мажет.
+       1 «Средний» — полная оценка с оглядкой на весь стол: кому подкидываем,
+                     кто близок к выходу, чем кончится раунд, что довесят
+                     после меня. Память короткая: бито и чужие взятки не
+                     помнит, вероятности прикидывает «по всему, чего не видел».
+       2 «Сложный» — то же самое плюс честный счёт вышедших карт: помнит бито,
+                     помнит, кто что забрал со стола, знает, кому достался
+                     козырь из-под колоды. Оттого вероятности у него точные.
+
+     Чужие руки и колода боту недоступны НА ЛЮБОМ УРОВНЕ. Из состояния он
+     берёт только открытую информацию: свою руку, стол, козырь, ДЛИНЫ чужих
+     рук, длину колоды и открытую память стола (st.gone / st.held). Проверено
+     тестом: если подменить содержимое чужих рук и колоды, сохранив длины,
+     ни одно решение бота не меняется.
+
+     Случайность — только botRnd(state, игрок, соль): чистая функция от зерна,
+     номера хода и места, состояние не трогает. Партия с одним зерном всегда
+     проигрывается одинаково.
+     ====================================================================== */
+
+  var ALL_CARDS = buildDeck();
+  var CARD_BY_ID = {};
+  (function () { for (var i = 0; i < ALL_CARDS.length; i++) CARD_BY_ID[ALL_CARDS[i].id] = ALL_CARDS[i]; })();
+
+  function botLevel(st, p) {
+    var s = st.seats && st.seats[p];
+    if (s && (s.diff === 0 || s.diff === 1 || s.diff === 2)) return s.diff;
+    return normDiff(st.opts && st.opts.diff);
+  }
+
+  /* ---------- Что бот знает о ненайденных картах ---------- */
+
+  // Карты, местоположение которых боту известно честно, «глазами».
+  function seenBy(st, me, lvl) {
+    var seen = {}, i, p, h = st.hands[me], t = st.table;
+    for (i = 0; i < h.length; i++) seen[h[i].id] = 1;                 // своя рука
+    for (i = 0; i < t.length; i++) {                                   // стол
+      seen[t[i].a.id] = 1;
+      if (t[i].d) seen[t[i].d.id] = 1;
+    }
+    if (st.deck.length > 0) seen[st.trumpCard.id] = 1;                 // козырь лежит открыто под колодой
+    if (lvl >= DIFF_HARD) {                                            // счёт карт — только на сложном
+      if (st.gone) for (i = 0; i < st.gone.length; i++) seen[st.gone[i]] = 1;
+      if (st.held) {
+        for (p = 0; p < st.held.length; p++) {
+          for (i = 0; i < st.held[p].length; i++) seen[st.held[p][i]] = 1;
+        }
+      }
+    }
+    return seen;
+  }
+
   /*
-   * Эвристика, а не идеальная игра: бот бережёт козыри, сливает мелочь,
-   * ближе к концу колоды играет жаднее, иногда ошибается намеренно.
-   * Случайность берётся из зерна партии — значит, партия воспроизводима.
+   * info — рабочая картина мира для одного решения.
+   *   pool  — карты, о которых бот не знает ничего (у кого-то на руках или в колоде);
+   *   unk[q]— сколько карт игрока q боту неизвестны (длина руки минус то, что он видел);
+   *   known[q] — id карт, про которые точно известно, что они у q.
+   * Средний уровень кладёт в pool и бито тоже — потому и ошибается в оценках.
    */
+  function makeInfo(st, me, lvl) {
+    var seen = seenBy(st, me, lvl), n = st.opts.players, i, k, c, s;
+    var pool = [], rank = {}, suit = {}, above = {};
+
+    for (i = 0; i < RANKS.length; i++) rank[RANKS[i]] = 0;
+    for (i = 0; i < SUITS.length; i++) {
+      s = SUITS[i]; suit[s] = 0; above[s] = {};
+      for (k = 0; k < RANKS.length; k++) above[s][RANKS[k]] = 0;
+    }
+    for (i = 0; i < ALL_CARDS.length; i++) {
+      c = ALL_CARDS[i];
+      if (seen[c.id]) continue;
+      pool.push(c); rank[c.r]++; suit[c.s]++;
+      for (k = 0; k < RANKS.length; k++) if (RANKS[k] < c.r) above[c.s][RANKS[k]]++;
+    }
+
+    var unk = [], known = [], a;
+    for (i = 0; i < n; i++) {
+      a = (lvl >= DIFF_HARD && st.held && st.held[i]) ? st.held[i] : [];
+      known.push(a);
+      // st.hands[i].length — это открытая величина: сколько карт у соседа, видно всем
+      unk.push(i === me ? 0 : Math.max(0, st.hands[i].length - a.length));
+    }
+
+    return {
+      lvl: lvl, me: me, trump: st.trump, end: st.deck.length === 0,
+      pool: pool, M: pool.length, rank: rank, suit: suit, above: above,
+      unk: unk, known: known, avg: -1
+    };
+  }
+
+  // Вероятность вытянуть хотя бы одну «нужную» карту: k карт из мешка на M,
+  // нужных в мешке b штук. Обычная гипергеометрия.
+  function pAtLeastOne(M, b, k) {
+    if (k <= 0 || b <= 0 || M <= 0) return 0;
+    if (b >= M || k > M - b) return 1;
+    var p = 1, i;
+    for (i = 0; i < k; i++) p *= (M - b - i) / (M - i);
+    return 1 - p;
+  }
+
+  function nBeat(info, atk) {                        // сколько в пуле карт, бьющих atk
+    var n = info.above[atk.s][atk.r];
+    if (atk.s !== info.trump) n += info.suit[info.trump];
+    return n;
+  }
+
+  function nRanks(info, rset) {                      // сколько в пуле карт нужных достоинств
+    var n = 0, r;
+    for (r in rset) if (rset[r]) n += info.rank[r] || 0;
+    return n;
+  }
+
+  // Вероятность, что у игрока q найдётся чем побить atk
+  function pBeat(st, info, q, atk) {
+    if (st.out[q] || q === info.me) return 0;
+    var a = info.known[q], i, c;
+    for (i = 0; i < a.length; i++) {
+      c = CARD_BY_ID[a[i]];
+      if (c && beats(c, atk, info.trump)) return 1;  // видели своими глазами
+    }
+    return pAtLeastOne(info.M, nBeat(info, atk), info.unk[q]);
+  }
+
+  // Вероятность, что у q есть карта одного из достоинств rset (то есть ему есть чем подкинуть)
+  function pRank(st, info, q, rset) {
+    if (st.out[q] || q === info.me) return 0;
+    var a = info.known[q], i, c;
+    for (i = 0; i < a.length; i++) {
+      c = CARD_BY_ID[a[i]];
+      if (c && rset[c.r]) return 1;
+    }
+    return pAtLeastOne(info.M, nRanks(info, rset), info.unk[q]);
+  }
+
+  // Сколько примерно карт нужных достоинств у q на руках
+  function expRank(st, info, q, rset) {
+    if (st.out[q] || q === info.me) return 0;
+    var a = info.known[q], i, c, n = 0;
+    for (i = 0; i < a.length; i++) { c = CARD_BY_ID[a[i]]; if (c && rset[c.r]) n++; }
+    if (info.M > 0) n += info.unk[q] * nRanks(info, rset) / info.M;
+    return n;
+  }
+
+  /* ---------- Цена карт и положение за столом ---------- */
+
+  // Насколько жалко расставаться с картой. Козырь дорог всегда; простая карта
+  // дорожает к концу колоды — там её бьёт только козырь.
+  function keepVal(st, c) {
+    if (c.s === st.trump) {
+      return st.deck.length ? (W.trBase + (c.r - 6) * W.trStep) : (W.trBaseE + (c.r - 6) * W.trStepE);
+    }
+    return (c.r - 6) * (st.deck.length ? W.plStep : W.plStepE);
+  }
+
+  // Средняя цена карты из пула — во что примерно обменяется сброс, пока колода жива
+  function poolAvg(st, info) {
+    if (info.avg >= 0) return info.avg;
+    var s = 0, i;
+    for (i = 0; i < info.pool.length; i++) s += keepVal(st, info.pool[i]);
+    info.avg = info.M ? s / info.M : 0;
+    return info.avg;
+  }
+
+  // Насколько игрок близок к выходу из игры: 1 — вот-вот выйдет, 0 — завален.
+  // Пока колода жива, все всё равно доберут до шести, поэтому вес мал.
+  function threat(st, q) {
+    if (st.out[q]) return 0;
+    var t = 1 - (st.hands[q].length - 1) / 7;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    return st.deck.length > 0 ? t * 0.3 : t;
+  }
+
+  // Сколько карт ещё довесят на стол, если раунд продолжится.
+  // Это и есть многопользовательская специфика: подкидывает не один человек.
+  function moreCards(st, info, me, extraRank) {
+    if (!st.opts.podkidnoy) return 0;
+    if (info.lvl < DIFF_HARD) return 0;              // средний вперёд не заглядывает
+    var room = Math.min(MAX_PAIRS, st.limit || 1) - st.table.length;
+    if (room <= 0) return 0;
+    if (st.hands[st.defender].length === 0) return 0;
+    var rs = tableRanks(st), q, exp = 0;
+    if (extraRank) rs[extraRank] = true;
+    for (q = 0; q < st.opts.players; q++) {
+      if (st.out[q] || q === me || q === st.defender) continue;
+      exp += expRank(st, info, q, rs);
+    }
+    exp *= W.guess;                                  // не всё, что есть, соперник выложит
+    return exp > room ? room : exp;
+  }
+
+  // Кому я открываю окно своей картой: не выйдет ли на ней тот, кто и так рядом с выходом
+  function windowRisk(st, info, me, r) {
+    var rs = {}, q, w = 0;
+    if (!st.opts.podkidnoy) return 0;                // подкидывать некому — окна нет
+    if (info.lvl < DIFF_HARD) return 0;              // средний за чужими руками не следит
+    rs[r] = true;
+    for (q = 0; q < st.opts.players; q++) {
+      if (st.out[q] || q === me || q === st.defender) continue;
+      var t = threat(st, q);
+      if (t > 0) w += t * pRank(st, info, q, rs);
+    }
+    return w;
+  }
+
+  function rankCounts(hand) {
+    var m = {}, i;
+    for (i = 0; i < hand.length; i++) m[hand[i].r] = (m[hand[i].r] || 0) + 1;
+    return m;
+  }
+
+  /* ---------- Веса ---------- */
+  /*
+   * Числа подобраны прогоном турниров бот-против-бота (12.08.2026). Объект
+   * отдаётся наружу как Durak.botWeights, чтобы автотесты могли крутить веса
+   * по одному и мерить результат. На саму игру это не влияет: в интерфейсе
+   * веса никто не трогает.
+   */
+
+  var W = {
+    /* Цена карты в руке */
+    trBase: 18, trStep: 6,       // козырь, пока колода жива:   18 … 66
+    trBaseE: 26, trStepE: 4,     // козырь при пустой колоде:   26 … 58
+    plStep: 1.7,                 // простая карта, колода жива:  0 … 13,6
+    plStepE: 1.6,                // простая карта, колоды нет:   0 … 12,8
+
+    /* Защита: отбиться, перевести или взять */
+    tempo: 10,       // отбился или перевёл — ходишь дальше сам, а это в дураке много
+    spend: 0.75,     // во что обходится отданная карта
+    trade: 0.5,      // …за вычетом того, что чужую карту снял со стола навсегда
+    takeCard: 5.5,   // цена каждой карты, которую пришлось забрать
+    takeCardEnd: 15, // то же, когда колода кончилась и карты уже не разменять
+    takeBase: 12,    // взял — инициатива осталась у соперника, он заходит снова
+    takeBaseEnd: 12,
+    excess: 4.5,     // карты сверх шести уже не разменять: добора на них не будет
+    riskCard: 4.2,   // цена каждой карты, которую довесят, если я отобьюсь
+    riskCardEnd: 20, // при пустой колоде такой довесок особенно тяжёл
+    backfire: 25,    // соперник переведёт мою карту дальше — стопка вернётся больше
+    tight: 8,        // перевод тому, у кого карт в обрез
+    transfer: 0,     // общая охота до перевода: плюс — переводит чаще
+
+    /* Атака и подкидывание */
+    kill: 2,         // соперник не побьёт — заберёт стол; считаем ЗА КАЖДУЮ карту стола
+    killEnd: 3,
+    dumpEnd: 16,     // сброс карты при пустой колоде — прямой шаг к выходу из игры
+    dumpExtra: 5,    // карт больше шести: лишнее всё равно сливать
+    redraw: 0.5,     // пока колода жива, сброс — это обмен на среднюю карту из колоды
+    pair: 7,         // заход достоинством, которого у меня несколько (подкидной)
+    pairEnd: 8,
+    arm: 3.5,        // отдавать козыри тому, кто берёт, — вооружать его
+    armBase: 8,
+    throwBar: 0,     // планка «стоит ли вообще подкидывать»: выше — подкидывает реже
+
+    /* Оглядка на остальной стол */
+    helped: 8,       // помог сопернику сбросить карту
+    window: 11,      // открыл окно тому, кто рядом с выходом
+    load: 10,        // догрузить того, кто вот-вот выйдет
+    lastCard: 15,    // у соперника последняя карта: заходить тем, что он не побьёт
+    feed: 15,        // подкинул то, что он побьёт последней картой, — сам его выпустил
+    exit: 400,       // ход, который выводит из игры меня самого — важнее всего
+    guess: 0.62,     // какую долю подходящих карт соперники и правда выложат
+
+    slip: 0.08       // как часто средний берёт второй по счёту ход вместо лучшего
+  };
+
+  // Из чего выбирать. Сложный всегда берёт лучшее; средний иногда, по зерну,
+  // берёт второе по счёту — это его «не досмотрел». Случайность чистая:
+  // botRnd зависит только от зерна, номера хода и места.
+  function choose(st, me, lvl, list, salt) {
+    if (!list.length) return null;
+    var b = 0, s = -1, i;
+    for (i = 1; i < list.length; i++) if (list[i].sc > list[b].sc) b = i;
+    if (lvl >= DIFF_HARD || list.length < 2) return list[b].act;
+    for (i = 0; i < list.length; i++) if (i !== b && (s < 0 || list[i].sc > list[s].sc)) s = i;
+    if (s >= 0 && botRnd(st, me, salt) < W.slip) return list[s].act;
+    return list[b].act;
+  }
+
+  /* ---------- Точка входа ---------- */
 
   // me — за какое место играем. По умолчанию за то, чей сейчас ход:
   // тем же кодом можно прогонять бота против бота при проверке баланса.
@@ -774,40 +1131,204 @@ var Durak = (function () {
     if (me === undefined) me = actor;
     if (actor !== me) return null;
 
-    var a = (st.phase === 'defend') ? botDefend(st, me) : botAttack(st, me);
+    var lvl = botLevel(st, me);
+    var a = (st.phase === 'defend') ? botDefend(st, me, lvl) : botAttack(st, me, lvl);
     if (a) a.p = me;
     return a;
   }
 
-  function botAttack(st, me) {
-    var hand = st.hands[me], tr = st.trump, i, legalCards = [];
-    for (i = 0; i < hand.length; i++) if (canAddFor(st, me, hand[i])) legalCards.push(hand[i]);
-    if (!legalCards.length) return { type: 'done' };
+  /* ---------- Атака и подкидывание ---------- */
 
-    var plain = legalCards.filter(function (c) { return c.s !== tr; })
-      .sort(function (a, b) { return a.r - b.r; });
+  function botAttack(st, me, lvl) {
+    var hand = st.hands[me], i, cards = [];
+    for (i = 0; i < hand.length; i++) if (canAddFor(st, me, hand[i])) cards.push(hand[i]);
+    if (!cards.length) return { type: 'done' };
+    if (lvl === DIFF_EASY) return easyAttack(st, me, cards);
 
-    // Первый заход в раунде: младшая некозырная, козырь — только если некозырных нет
-    if (st.table.length === 0) {
-      if (plain.length) return { type: 'attack', cardId: plain[0].id };
-      var trumps = legalCards.slice().sort(function (a, b) { return a.r - b.r; });
-      return { type: 'attack', cardId: trumps[0].id };
+    var info = makeInfo(st, me, lvl);
+    return st.table.length === 0 ? botLead(st, me, lvl, info, cards)
+                                 : botThrow(st, me, lvl, info, cards);
+  }
+
+  // Первый заход в раунде
+  function botLead(st, me, lvl, info, cards) {
+    var def = st.defender, end = info.end, dup = rankCounts(st.hands[me]);
+    var room = Math.min(MAX_PAIRS, st.limit || 1);
+    var killW = end ? W.killEnd : W.kill;
+    var list = [], i, c, sc, pb, extra, pile;
+
+    for (i = 0; i < cards.length; i++) {
+      c = cards[i];
+      pb = pBeat(st, info, def, c);
+      extra = 0;
+
+      // Подкидной: заходить выгоднее тем достоинством, которого у меня несколько —
+      // добьём защищающегося своими же картами, да и остальные добавят
+      if (st.opts.podkidnoy) extra = Math.min((dup[c.r] || 1) - 1, room - 1);
+
+      sc = -keepVal(st, c);
+      if (extra > 0) sc += extra * (end ? W.pairEnd : W.pair);
+
+      // Не побьёт — заберёт весь стол. Сколько это карт, столько и выгода:
+      // в простом дураке всего одна, в подкидном — вся стопка.
+      pile = 1 + (st.opts.podkidnoy ? Math.min(room - 1, extra + moreCards(st, info, me, c.r)) : 0);
+      sc += (1 - pb) * killW * pile;
+
+      // У соперника последняя карта: отобьётся — выйдет из игры. Заходим тем,
+      // что он не побьёт, — тогда заберёт стол и останется играть.
+      if (end && st.hands[def].length === 1) sc += (1 - pb) * W.lastCard;
+      sc -= pb * threat(st, def) * W.helped;
+      sc -= windowRisk(st, info, me, c.r) * W.window;
+
+      // Заход последней картой при пустой колоде — это выход из игры
+      if (end && st.hands[me].length === 1) sc += W.exit;
+
+      list.push({ sc: sc, act: { type: 'attack', cardId: c.id } });
+    }
+    return choose(st, me, lvl, list, 12);
+  }
+
+  // Подкидывание: и пока защищающийся отбивается, и пока он берёт
+  function botThrow(st, me, lvl, info, cards) {
+    var def = st.defender, end = info.end, taking = st.phase === 'take';
+    var mine = st.hands[me].length, avg = poolAvg(st, info);
+    var thr = threat(st, def);
+    var list = [{ sc: W.throwBar, act: { type: 'done' } }], i, c, sc, pb;
+
+    for (i = 0; i < cards.length; i++) {
+      c = cards[i];
+
+      // 1. Сама по себе отдача карты
+      if (end) sc = W.dumpEnd;
+      else {
+        sc = (avg - keepVal(st, c)) * W.redraw;
+        if (mine > HAND_SIZE) sc += W.dumpExtra;
+      }
+      if (end && mine === 1) sc += W.exit;            // подкинул последнюю — вышел из игры
+
+      if (taking) {
+        // 2а. Соперник берёт: карта уедет ему в руку насовсем
+        sc += W.load * thr;
+        if (c.s === st.trump) sc -= W.armBase + (c.r - 6) * W.arm;   // козырями не вооружаем
+        else if (c.r >= 13) sc -= (c.r - 12) * 3;
+      } else {
+        // 2б. Соперник отбивается: считаем, чем это кончится.
+        // Не побьёт — заберёт весь стол вместе с моей картой, а он уже не маленький.
+        pb = pBeat(st, info, def, c);
+        sc += (1 - pb) * (end ? W.killEnd : W.kill) *
+              (tableCardCount(st) + 1 + moreCards(st, info, me, c.r));
+        sc -= pb * thr * W.helped;
+        // У него последняя карта. Подкинуть то, что он побьёт, — значит своей
+        // рукой вывести его из игры; лучше вообще промолчать.
+        if (end && st.hands[def].length === 1) sc += (1 - pb) * W.lastCard - pb * W.feed;
+        sc -= windowRisk(st, info, me, c.r) * W.window;
+      }
+
+      list.push({ sc: sc, act: { type: 'attack', cardId: c.id } });
+    }
+    return choose(st, me, lvl, list, 13);
+  }
+
+  /* ---------- Защита ---------- */
+
+  function botDefend(st, me, lvl) {
+    if (lvl === DIFF_EASY) return easyDefend(st, me);
+
+    var hand = st.hands[me], tr = st.trump, i, c, sc;
+    var idx = undefendedIndex(st), atk = st.table[idx].a;
+    var info = makeInfo(st, me, lvl), end = info.end;
+    var pile = tableCardCount(st);
+
+    var list = [];
+
+    // --- Взять
+    var addWhileTaking = moreCards(st, info, me, 0);
+    var grab = pile + addWhileTaking;
+    // Карты сверх шести добором уже не разменять — они осядут в руке
+    var excess = Math.max(0, hand.length + grab - HAND_SIZE);
+    sc = -(grab * (end ? W.takeCardEnd : W.takeCard) + excess * W.excess +
+           (end ? W.takeBaseEnd : W.takeBase));
+    list.push({ sc: sc, act: { type: 'take' } });
+
+    // --- Отбиться
+    // Козырем по мелочи — перебор, козырем по крупной карте — честный размен:
+    // чужую карту я со стола снимаю навсегда, и это часть выгоды.
+    var atkVal = keepVal(st, atk) * W.trade;
+    for (i = 0; i < hand.length; i++) {
+      c = hand[i];
+      if (!beats(c, atk, tr)) continue;
+      var risk = moreCards(st, info, me, c.r);
+      sc = -(keepVal(st, c) * W.spend - atkVal) - risk * (end ? W.riskCardEnd : W.riskCard) + W.tempo;
+      if (end) sc += W.dumpEnd;                       // отбился — карт стало меньше
+      // Отбился последней картой — стол закрывается, добавить уже нечем: выход из игры
+      if (end && hand.length === 1) sc += W.exit;
+      list.push({ sc: sc, act: { type: 'defend', cardId: c.id } });
     }
 
-    // Подкидывание. Козырями не подкидываем никогда — это подарок сопернику.
-    if (!plain.length) return { type: 'done' };
+    // --- Перевести
+    if (canTransferNow(st)) {
+      var tgt = transferTarget(st), need = st.table.length + 1, rs;
+      for (i = 0; i < hand.length; i++) {
+        c = hand[i];
+        if (c.r !== st.table[0].a.r) continue;
+        sc = -keepVal(st, c) * W.spend + W.tempo + W.transfer;
+        if (end) sc += W.dumpEnd; else sc += (poolAvg(st, info) - keepVal(st, c)) * W.redraw;
+        // Перевод грузит следующего: чем ближе он к выходу, тем это ценнее
+        sc += threat(st, tgt) * W.load;
+        // Ему придётся отбивать всю стопку — если карт у него в обрез, тем лучше
+        if (st.hands[tgt].length <= need + 1) sc += W.tight;
+        // Но если у него есть такое же достоинство, он переведёт дальше — и за
+        // столом на двоих стопка вернётся ко мне, только больше
+        if (lvl >= DIFF_HARD) {
+          rs = {}; rs[c.r] = true;
+          sc -= pRank(st, info, tgt, rs) * W.backfire * (st.opts.players === 2 ? 1 : 0.4);
+        }
+        if (end && hand.length === 1) sc += W.exit;   // перевёл последней — вышел
+        list.push({ sc: sc, act: { type: 'transfer', cardId: c.id } });
+      }
+    }
 
-    if (st.phase === 'take') return { type: 'attack', cardId: plain[0].id };  // соперник берёт — грузим по полной
+    return choose(st, me, lvl, list, 14);
+  }
+
+  /* ---------- Лёгкий уровень ---------- */
+  /*
+   * Эвристика первой версии игры: бережёт козыри, сливает мелочь, ближе к концу
+   * колоды играет жаднее. Сверху — живые ошибки: иногда зайдёт не с той карты,
+   * иногда не подкинет, иногда отобьётся картой покрупнее нужного.
+   * Карт не считает, на остальной стол не смотрит.
+   */
+
+  function pick(st, me, salt, arr) {
+    var i = Math.floor(botRnd(st, me, salt) * arr.length);
+    if (i < 0) i = 0; else if (i >= arr.length) i = arr.length - 1;
+    return arr[i];
+  }
+
+  function easyAttack(st, me, cards) {
+    var tr = st.trump;
+    var plain = cards.filter(function (c) { return c.s !== tr; })
+      .sort(function (a, b) { return a.r - b.r; });
+
+    if (st.table.length === 0) {
+      var lead;
+      if (plain.length) lead = plain[0];
+      else lead = cards.slice().sort(function (a, b) { return a.r - b.r; })[0];
+      if (botRnd(st, me, 3) < 0.16) lead = pick(st, me, 4, cards);      // зашёл не с той
+      return { type: 'attack', cardId: lead.id };
+    }
+
+    if (!plain.length) return { type: 'done' };                          // козырями не подкидываем
+    if (st.phase === 'take') return { type: 'attack', cardId: plain[0].id };
 
     var oppLeft = st.hands[st.defender].length;
-    // Колода кончилась, у защищающегося мало карт — лишняя карта поможет ему сбросить остатки
     if (st.deck.length === 0 && oppLeft <= 2) return { type: 'done' };
-    // Пока колода жива, дорогие карты не разбрасываем
     if (plain[0].r >= 12 && st.deck.length > 0) return { type: 'done' };
+    if (botRnd(st, me, 5) < 0.12) return { type: 'done' };                // просто не заметил
     return { type: 'attack', cardId: plain[0].id };
   }
 
-  function botDefend(st, me) {
+  function easyDefend(st, me) {
     var hand = st.hands[me], tr = st.trump;
     var idx = undefendedIndex(st);
     var atk = st.table[idx].a;
@@ -815,12 +1336,11 @@ var Durak = (function () {
     var opts = hand.filter(function (c) { return beats(c, atk, tr); })
       .sort(function (a, b) { return power(a, tr) - power(b, tr); });
 
-    // Перевод — если есть подходящее достоинство и это не козырь
     if (canTransferNow(st)) {
       var cands = hand.filter(function (c) { return c.r === st.table[0].a.r && c.s !== tr; })
         .sort(function (a, b) { return a.r - b.r; });
       if (cands.length) {
-        var mustTrump = !opts.length || opts[0].s === tr;   // иначе пришлось бы брать или тратить козырь
+        var mustTrump = !opts.length || opts[0].s === tr;
         if (mustTrump || atk.r <= 9 || botRnd(st, me, 1) < 0.45) {
           return { type: 'transfer', cardId: cands[0].id };
         }
@@ -829,14 +1349,16 @@ var Durak = (function () {
 
     if (!opts.length) return { type: 'take' };
 
-    var best = opts[0];                                     // минимально возможная карта
+    var best = opts[0];
+    if (opts.length > 1 && botRnd(st, me, 6) < 0.15) best = opts[1];      // отбился крупнее, чем надо
+
     if (best.s === tr && atk.s !== tr) {
-      // Считаем цену отбоя: стоит ли дорогой козырь того, что придётся забрать
       var takeSize = tableCardCount(st);
-      var endgame = st.deck.length <= 4;                    // к концу колоды козыри тратим смелее
+      var endgame = st.deck.length <= 4;
       if (!endgame && takeSize <= 2 && best.r >= 12 && atk.r <= 9) return { type: 'take' };
       if (st.deck.length >= 10 && takeSize <= 1 && best.r >= 11 && atk.r <= 8) return { type: 'take' };
     }
+    if (botRnd(st, me, 7) < 0.07 && tableCardCount(st) <= 2) return { type: 'take' };  // сдался раньше времени
     return { type: 'defend', cardId: best.id };
   }
 
@@ -859,6 +1381,9 @@ var Durak = (function () {
   return {
     RANKS: RANKS, SUITS: SUITS, SUIT_SYM: SUIT_SYM, RANK_LABEL: RANK_LABEL,
     MODE_NAME: MODE_NAME,
+    DIFF_NAME: DIFF_NAME, DIFF_EASY: DIFF_EASY, DIFF_MED: DIFF_MED, DIFF_HARD: DIFF_HARD,
+    normDiff: normDiff, botLevel: botLevel,
+    botWeights: W,               // веса эвристики — крючок для автотестов, игрой не используется
     MIN_PLAYERS: MIN_PLAYERS, MAX_PLAYERS: MAX_PLAYERS, HAND_SIZE: HAND_SIZE,
     create: create,
     apply: apply,

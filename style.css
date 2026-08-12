@@ -100,6 +100,9 @@ html,body{
 }
 .seg-b.on{ background:var(--accent); border-color:#b9862a; color:#241a05; }
 .seg-b:focus-visible{ outline:2px solid var(--accent-2); outline-offset:2px; }
+
+/* Уровень бота: в кнопках слова, а не цифры — шрифт помельче, чтобы влезало */
+#seg-diff .seg-b, #seg-fr-diff .seg-b{ font-size:14px; padding:10px 2px; }
 .players-hint{ margin:8px 0 0; font-size:13px; color:var(--muted); }
 
 .opts{ display:flex; flex-direction:column; gap:10px; }
@@ -318,6 +321,49 @@ tr.total{ background:var(--panel-2); font-weight:700; }
 .hand .card.playable{ box-shadow:0 0 0 2px rgba(216,164,58,.9), 0 4px 12px rgba(0,0,0,.45); }
 .hand .card.playable.tr-mode{ box-shadow:0 0 0 2px var(--accent-2), 0 4px 12px rgba(0,0,0,.45); }
 
+/* ---------- Перетаскивание карт ----------
+   Тап работает как раньше; перетаскивание — второй способ, на мыши и на пальце.
+   touch-action убираем ТОЛЬКО у карт в руке и ТОЛЬКО когда ход наш: иначе палец
+   на карте не сможет пролистать страницу, а это уже поломка прокрутки.        */
+
+.hand.grab .card{ touch-action:none; cursor:grab; }
+.hand .card.dragging{
+  z-index:46; cursor:grabbing;
+  filter:none;                                  /* тусклую карту на время жеста показываем целиком */
+  box-shadow:0 0 0 2px rgba(216,164,58,.95), 0 16px 30px rgba(0,0,0,.6);
+}
+.hand .card.dragging.bad{ box-shadow:0 0 0 2px var(--danger), 0 16px 30px rgba(0,0,0,.6); }
+
+/* сукно подсвечивается ещё до отпускания: золотом — ход пройдёт, красным — нет */
+.middle{ transition: box-shadow .12s linear, border-color .12s linear; }
+.middle.drop-ok{
+  border-color:var(--accent);
+  box-shadow: inset 0 2px 22px rgba(0,0,0,.45), 0 0 0 2px rgba(216,164,58,.85);
+}
+.middle.drop-ok.drop-tr{
+  border-color:var(--accent-2);
+  box-shadow: inset 0 2px 22px rgba(0,0,0,.45), 0 0 0 2px rgba(78,161,255,.85);
+}
+.middle.drop-no{
+  border-color:var(--danger);
+  box-shadow: inset 0 2px 22px rgba(0,0,0,.45), 0 0 0 2px rgba(217,83,79,.75);
+}
+
+/* ---------- Слой анимаций ----------
+   Копии карт летают здесь, поверх раскладки и ниже итогового окна.
+   Двигаем только transform и opacity — ни ширины, ни координат. */
+
+.fx{
+  position:fixed; inset:0; z-index:40;
+  pointer-events:none; overflow:hidden;
+}
+.fx .card{
+  position:absolute; left:0; top:0;
+  transform-origin:50% 50%;
+  will-change: transform, opacity;
+}
+.card.fx-hide{ opacity:0; }                     /* пока летит копия, настоящая карта не видна */
+
 /* ---------- Сама карта ---------- */
 
 .card{
@@ -370,10 +416,21 @@ tr.total{ background:var(--panel-2); font-weight:700; }
   box-shadow: inset 0 0 0 3px #e9e6dd, inset 0 0 0 4px #16264a, 0 3px 8px rgba(0,0,0,.45);
 }
 
-/* появление новой карты (без прозрачности — чтобы карта никогда не «просвечивала») */
-@keyframes pop{ from{ transform:scale(.84) translateY(-9px); } }
-.card.fresh{ animation: pop .18s ease-out; }
-.pair .card.def.fresh{ animation:none; }
+/* Появление карты раньше рисовалось коротким «поп»-кадром прямо на самой карте.
+   С 12.08.2026 этим занимается слой анимаций: он показывает, ОТКУДА карта пришла,
+   а не просто что она возникла. Заодно ушла давняя беда: «поп» менял transform
+   настоящей карты, и замеры её положения на время анимации врали. */
+
+/* ---------- Режим «без анимаций» ----------
+   Ручной галочки нет: анимации играют всегда. Класс вешает ui.js на <html> только
+   по системной настройке «уменьшить движение» — если человек попросил об этом на
+   уровне операционной системы, спорить с ним неправильно.
+   Перетаскивание при этом продолжает работать — это разные вещи. */
+.no-anim .hand .card{ transition:none; }
+.no-anim .middle{ transition:none; }
+.no-anim .fx{ display:none; }
+.no-anim .btn{ transition: background .15s, border-color .15s; }
+.no-anim .btn:active{ transform:none; }
 
 /* ---------- Итог партии ---------- */
 
@@ -522,6 +579,7 @@ h2.ctr{ margin:0 0 10px; }
   .seats.n5 .seat{ flex-basis:66px; min-width:60px; }
   .seats.n6 .seat{ flex-basis:30%; min-width:0; }
   .seg-b{ font-size:16px; padding:10px 0; }
+  #seg-diff .seg-b, #seg-fr-diff .seg-b{ font-size:13px; }
 }
 /* Совсем узкий экран (320 px): шестеро должны помещаться без прокрутки вбок */
 @media (max-width:330px){

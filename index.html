@@ -28,6 +28,16 @@
       <p class="players-hint" id="players-hint">Ты и один бот</p>
     </div>
 
+    <div class="players">
+      <span class="players-lbl">Сложность ботов</span>
+      <div class="seg" id="seg-diff">
+        <button type="button" class="seg-b" data-d="0">Лёгкий</button>
+        <button type="button" class="seg-b" data-d="1">Средний</button>
+        <button type="button" class="seg-b" data-d="2">Сложный</button>
+      </div>
+      <p class="players-hint" id="diff-hint">—</p>
+    </div>
+
     <div class="opts">
       <label class="opt">
         <input type="checkbox" id="opt-pod">
@@ -91,6 +101,16 @@
     </div>
 
     <p class="modename">Режим: <b id="fr-mode">Подкидной</b></p>
+
+    <div class="players">
+      <span class="players-lbl">Сложность ботов, которыми добьём состав</span>
+      <div class="seg" id="seg-fr-diff">
+        <button type="button" class="seg-b" data-d="0">Лёгкий</button>
+        <button type="button" class="seg-b" data-d="1">Средний</button>
+        <button type="button" class="seg-b" data-d="2">Сложный</button>
+      </div>
+      <p class="players-hint" id="fr-diff-hint">—</p>
+    </div>
 
     <button class="btn primary big" id="fr-create">Создать стол</button>
 
@@ -187,7 +207,7 @@
   <div class="seats n2" id="seats"></div>
 
   <!-- колода, козырь, бито и стол -->
-  <div class="middle">
+  <div class="middle" id="middle">
     <div class="deckbox" id="deckbox"></div>
     <div class="table" id="table"></div>
   </div>
@@ -202,6 +222,11 @@
   <!-- рука игрока -->
   <div class="hand" id="hand"></div>
 </section>
+
+<!-- ===== СЛОЙ АНИМАЦИЙ =====
+     Сюда кладутся временные копии карт на время полёта. Слой ничего не ловит
+     и ни на что не влияет: настоящая раскладка к этому моменту уже готова. -->
+<div class="fx" id="fx" aria-hidden="true"></div>
 
 <!-- ===== ИТОГ ПАРТИИ ===== -->
 <div class="overlay hidden" id="overlay">

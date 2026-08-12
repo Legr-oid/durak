@@ -284,7 +284,9 @@ var DurakNet = (function () {
       hostPid: isHost ? pid : '',
       rules: {
         podkidnoy: !!(o.rules && o.rules.podkidnoy),
-        perevodnoy: !!(o.rules && o.rules.perevodnoy)
+        perevodnoy: !!(o.rules && o.rules.perevodnoy),
+        // уровень ботов выбирает хост; гостям он приезжает вместе с лобби
+        diff: D.normDiff(o.rules && o.rules.diff)
       },
       started: false,
       members: [],              // [{pid, nick, kind:'host'|'remote'|'bot'}]
@@ -641,7 +643,8 @@ var DurakNet = (function () {
       if (!l) return;
       hostPid = l.hostPid || hostPid;
       if (hostPid) seen[hostPid] = now();
-      lobby.rules = l.rules;
+      lobby.rules = l.rules || lobby.rules;
+      lobby.rules.diff = D.normDiff(lobby.rules.diff);
       lobby.members = l.members;
       lobby.links = l.links || [];
       lobby.hostPid = l.hostPid;
@@ -743,6 +746,7 @@ var DurakNet = (function () {
         players: n,
         podkidnoy: lobby.rules.podkidnoy,
         perevodnoy: lobby.rules.perevodnoy,
+        diff: lobby.rules.diff,
         seats: seats
       });
       game.gen = ++gen;
@@ -763,6 +767,7 @@ var DurakNet = (function () {
         players: game.opts.players,
         podkidnoy: lobby.rules.podkidnoy,
         perevodnoy: lobby.rules.perevodnoy,
+        diff: lobby.rules.diff,
         seats: seats
       });
       game.gen = ++gen;

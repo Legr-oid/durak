@@ -57,7 +57,7 @@
       nick: '',              // имя для игры с друзьями; в офлайне не нужно
       createdAt: new Date().toISOString(),
       updatedAt: null,
-      settings: { podkidnoy: true, perevodnoy: false, players: 2 },
+      settings: { podkidnoy: true, perevodnoy: false, players: 2, diff: D.DIFF_MED },
       stats: { modes: emptyRows(MODE_KEYS), players: emptyRows(PLAYER_KEYS), total: emptyRow() },
       history: []            // последние 50 партий
     };
@@ -92,6 +92,12 @@
 
           if (!o.settings) o.settings = { podkidnoy: true, perevodnoy: false, players: 2 };
           if (!o.settings.players) o.settings.players = 2;
+          // Уровень бота появился 12.08.2026. У старых записей его нет — ставим средний.
+          o.settings.diff = D.normDiff(o.settings.diff);
+          // Галочка «Без анимаций» пожила один день и убрана 12.08.2026: анимации
+          // играют всегда, слушаемся только системного «уменьшить движение».
+          // У кого-то поле уже лежит в браузере — просто вычищаем, оно не нужно.
+          delete o.settings.noAnim;
           if (!o.history) o.history = [];
           for (i = 0; i < o.history.length; i++) {
             if (!o.history[i].players) o.history[i].players = 2;
@@ -163,7 +169,6 @@
   var transferMode = false;// игрок нажал «Перевести» и выбирает карту
   var recorded = false;    // результат партии уже записан в статистику
   var moveGuard = 0;       // страховка от бесконечного цикла
-  var seen = {};           // id карт, которые уже были на экране (для анимации новых)
 
   var net = null;          // соединение со столом или null в офлайне
   var netLegal = null;     // что мне можно — считает создатель стола
@@ -177,7 +182,7 @@
 
   var handEl = $('hand'), tableEl = $('table'), deckEl = $('deckbox'), seatsEl = $('seats');
   var statusMainEl = $('status-main'), statusLogEl = $('status-log'), controlsEl = $('controls');
-  var gameScreenEl = $('scr-game');
+  var gameScreenEl = $('scr-game'), middleEl = $('middle'), fxLayer = $('fx');
 
   var EMPTY_LEGAL = {
     actor: null, play: [], transfer: [], canTake: false, canDone: false,
@@ -207,12 +212,13 @@
       players: n,
       podkidnoy: store.settings.podkidnoy,
       perevodnoy: store.settings.perevodnoy,
+      diff: store.settings.diff,
       seats: seats
     });
     transferMode = false;
     recorded = false;
     moveGuard = 0;
-    seen = {};
+    resetFx(true);          // забыть прошлую партию и показать раздачу
     $('overlay').classList.add('hidden');
     enterGameScreen();
     render();
@@ -224,6 +230,7 @@
     gameScreenEl.setAttribute('data-players', String(n));
     var label = D.MODE_NAME[D.modeKey(state.opts)] + ' · ' + n;
     if (net) label += ' · ' + net.code;
+    else label += ' · ' + D.DIFF_NAME[D.normDiff(state.opts.diff)].toLowerCase();
     $('game-mode').textContent = label;
     $('btn-new').classList.toggle('hidden', !!net && !net.isHost);
     show('game');
@@ -300,20 +307,25 @@
     scheduleBot();
   }
 
+  // Можно ли прямо сейчас пойти этой картой. Один ответ и для тапа, и для перетаскивания.
+  function canPlayNow(id) {
+    if (!state || state.over || pending) return false;
+    if (D.actorOf(state) !== me) return false;
+    var L = myLegal();
+    return (transferMode ? L.transfer : L.play).indexOf(id) >= 0;
+  }
+
+  // Собственно ход выбранной картой. Сюда приходят и тап, и бросок на стол.
+  function playCard(id) {
+    if (!canPlayNow(id)) return;
+    if (transferMode) { doAction({ type: 'transfer', cardId: id }); return; }
+    doAction({ type: state.phase === 'defend' ? 'defend' : 'attack', cardId: id });
+  }
+
   handEl.addEventListener('click', function (e) {
     var el = e.target.closest ? e.target.closest('.card') : null;
-    if (!el || !state || state.over) return;
-    if (D.actorOf(state) !== me) return;
-
-    var id = el.getAttribute('data-id');
-    var L = myLegal();
-
-    if (transferMode) {
-      if (L.transfer.indexOf(id) >= 0) doAction({ type: 'transfer', cardId: id });
-      return;
-    }
-    if (L.play.indexOf(id) < 0) return;              // этой картой сейчас нельзя
-    doAction({ type: state.phase === 'defend' ? 'defend' : 'attack', cardId: id });
+    if (!el) return;
+    playCard(el.getAttribute('data-id'));
   });
 
   /* ======================================================================
@@ -331,6 +343,9 @@
     renderControls(L);
     renderNetbar();
     layoutHand();
+    dragRelink();                       // жест пережил перерисовку — карта не должна «отвалиться»
+    if (fxOn()) runFx(fxSnap());
+    else { clearFx(); fxPrev = null; fxDeal = false; }
   }
 
   /* ---------- Соперники по краю стола ---------- */
@@ -418,27 +433,31 @@
     var hand = state.hands[me], h = '', i;
     var active = transferMode ? L.transfer : L.play;
     var myTurn = D.actorOf(state) === me && !state.over && !pending;
+    var n = hand.length, mid = (n - 1) / 2, spread = fanSpread(n);
 
-    for (i = 0; i < hand.length; i++) {
+    for (i = 0; i < n; i++) {
       var c = hand[i];
       var cls = '';
       if (myTurn) {
         if (active.indexOf(c.id) >= 0) cls = 'playable' + (transferMode ? ' tr-mode' : '');
         else cls = 'dim';
       }
-      h += card(c, cls);
+      // Наклон веера пишем сразу в разметку, а не выставляем потом.
+      // Иначе браузер считает это изменением и запускает переход, а пока он идёт,
+      // положение карты «плывёт» — и замеры для анимаций врут.
+      h += card(c, cls, '--rot:' + ((i - mid) * spread).toFixed(2) + 'deg');
     }
     handEl.innerHTML = h;
+    // Пока ход не наш, карты не хватаются — и палец на карте спокойно листает страницу
+    handEl.classList.toggle('grab', myTurn);
   }
 
-  // Обёртка вокруг разметки карты + отметка «новая» для лёгкой анимации
-  function card(c, extra) {
+  // Разметка карты. Появление и перелёты рисует слой анимаций — здесь только вид.
+  function card(c, extra, style) {
     var red = (c.s === 'H' || c.s === 'D');
-    var fresh = seen[c.id] ? '' : ' fresh';
-    seen[c.id] = true;
     var lab = D.RANK_LABEL[c.r], sym = D.SUIT_SYM[c.s];
-    return '<div class="card' + (red ? ' red' : '') + (extra ? ' ' + extra : '') + fresh +
-           '" data-id="' + c.id + '">' +
+    return '<div class="card' + (red ? ' red' : '') + (extra ? ' ' + extra : '') +
+           '" data-id="' + c.id + '"' + (style ? ' style="' + style + '"' : '') + '>' +
              '<span class="c-top">' + lab + '<i>' + sym + '</i></span>' +
              '<span class="c-mid">' + sym + '</span>' +
              '<span class="c-bot">' + lab + '<i>' + sym + '</i></span>' +
@@ -535,6 +554,10 @@
   /* Карты сдвигаем друг на друга ровно настолько, чтобы вся рука влезла в экран.
      Если карт очень много — дополнительно уменьшаем их. */
 
+  // Угол веера зависит только от числа карт — потому и считается отдельно:
+  // renderHand пишет наклон прямо в разметку, а layoutHand про него знать не должен.
+  function fanSpread(n) { return Math.min(3.2, 26 / n); }
+
   function layoutHand() {
     var cards = handEl.children, n = cards.length;
     handEl.style.removeProperty('--cw');
@@ -543,7 +566,7 @@
 
     var cw = cards[0].offsetWidth;
     var mid = (n - 1) / 2;
-    var spread = Math.min(3.2, 26 / n);                  // угол веера: чем больше карт, тем мельче
+    var spread = fanSpread(n);                           // угол веера: чем больше карт, тем мельче
     // Крайние карты наклонены и потому вылезают вбок. Точка вращения ниже карты,
     // поэтому сдвиг примерно равен sin(угла) на половину высоты. Закладываем этот запас,
     // иначе на узком экране появляется горизонтальная прокрутка.
@@ -561,13 +584,588 @@
     var ov = (n > 1 && n * cw > avail) ? Math.ceil((n * cw - avail) / (n - 1)) : 0;
     ov = Math.max(0, Math.min(ov, Math.round(cw * MAX_OV)));
     handEl.style.setProperty('--ov', ov + 'px');
+  }
 
-    for (var i = 0; i < n; i++) {
-      cards[i].style.setProperty('--rot', ((i - mid) * spread).toFixed(2) + 'deg');
+  /* ======================================================================
+     АНИМАЦИИ
+     ----------------------------------------------------------------------
+     Правило одно: раскладка на экране всегда уже готова и правильна, а
+     анимация — это только копия карты, которая летит поверх и ничего не
+     держит. Поэтому ход никогда не ждёт анимацию, а если экран обновился
+     посреди полёта — копии просто выбрасываются и игра этого не замечает.
+
+     Двигаем исключительно transform и opacity: ни ширины, ни координат,
+     ни отступов — на слабом телефоне такое дёргается.
+
+     Что откуда взялось, считаем по разнице двух снимков: где какая карта
+     лежала до перерисовки и где лежит после. Движок про экран по-прежнему
+     ничего не знает.
+     ====================================================================== */
+
+  var FX_MOVE = 190;         // карта переехала: ход, отбой, взятие
+  var FX_GONE = 200;         // карта ушла с экрана: бито, забрал соперник
+  var FX_DRAW = 175;         // добор из колоды
+  var FX_DEAL = 190;         // раздача в начале партии
+  var FX_STEP = 42;          // задержка между картами в веере
+  var FX_WAIT = 60;          // добор начинается чуть позже, чем уходит стол
+  var EASE_OUT = 'cubic-bezier(.22,.61,.36,1)';
+  var EASE_IN = 'cubic-bezier(.55,.06,.68,.19)';
+
+  var fxPrev = null;         // снимок экрана после прошлой перерисовки
+  var fxDeal = false;        // следующая перерисовка — это раздача
+  var fxHidden = [];         // id карт, вместо которых сейчас летают копии
+  var fxTimer = null;
+  var fxFrom = null;         // откуда стартовать конкретной карте (бросок мышью/пальцем)
+
+  var reduceMQ = null;
+  try {
+    reduceMQ = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  } catch (e) { reduceMQ = null; }
+
+  // Ручной настройки нет: анимации играют всегда. Единственное исключение —
+  // системное «уменьшить движение»: человек попросил об этом на уровне ОС.
+  function animOff() { return !!(reduceMQ && reduceMQ.matches); }
+  function fxOn() { return !animOff(); }
+
+  function applyAnimClass() {
+    document.documentElement.classList.toggle('no-anim', animOff());
+  }
+
+  // Системную настройку можно переключить прямо во время игры
+  if (reduceMQ) {
+    var onReduceChange = function () {
+      applyAnimClass();
+      if (animOff()) clearFx();
+    };
+    if (reduceMQ.addEventListener) reduceMQ.addEventListener('change', onReduceChange);
+    else if (reduceMQ.addListener) reduceMQ.addListener(onReduceChange);
+  }
+
+  function resetFx(deal) {
+    clearFx();
+    fxPrev = null;
+    fxFrom = null;
+    fxDeal = !!deal;
+  }
+
+  /* ---------- Снимок экрана ---------- */
+
+  // Поворот карты берём из посчитанного стиля: у веера, у козыря под колодой
+  // и у отбившей карты он разный, а копия должна лететь так же, как лежала.
+  function rotOf(el) {
+    var t = '';
+    try { t = window.getComputedStyle(el).transform; } catch (e) { return 0; }
+    if (!t || t.indexOf('matrix(') !== 0) return 0;
+    var p = t.slice(7, -1).split(',');
+    var a = parseFloat(p[0]), b = parseFloat(p[1]);
+    if (!isFinite(a) || !isFinite(b)) return 0;
+    return Math.atan2(b, a) * 180 / Math.PI;
+  }
+
+  function pointOf(el) {
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return null;
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+  }
+
+  function fxSnap() {
+    if (!state || screens.game.classList.contains('hidden')) return null;
+    var n = state.opts.players, i;
+    var snap = {
+      cards: {}, seats: [], deck: null, pile: null, table: 0,
+      discard: state.discard, deckLen: state.deck.length, hands: [],
+      atk: state.attacker, def: state.defender, cw: 46, ch: 67
+    };
+    for (i = 0; i < n; i++) { snap.hands.push(state.hands[i].length); snap.seats.push(null); }
+
+    var els = gameScreenEl.querySelectorAll('.card[data-id]'), el, id, r, b;
+    for (i = 0; i < els.length; i++) {
+      el = els[i];
+      id = el.getAttribute('data-id');
+      if (!id || snap.cards[id]) continue;
+      r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      b = {
+        cx: r.left + r.width / 2, cy: r.top + r.height / 2,
+        w: el.offsetWidth || r.width, h: el.offsetHeight || r.height,
+        rot: rotOf(el), html: el.outerHTML,
+        zone: handEl.contains(el) ? 'hand' : (tableEl.contains(el) ? 'table' : 'deck'),
+        isDef: el.classList.contains('def')
+      };
+      if (b.zone === 'table') snap.table++;
+      snap.cards[id] = b;
+    }
+
+    snap.deck = pointOf(deckEl.querySelector('.deck .back')) ||
+                pointOf(deckEl.querySelector('.deck')) ||
+                pointOf(deckEl.querySelector('.deck-empty')) || pointOf(deckEl);
+    snap.pile = pointOf(deckEl.querySelector('.pile')) || snap.deck;
+
+    var probe = deckEl.querySelector('.card') || tableEl.querySelector('.card');
+    if (probe && probe.offsetWidth) { snap.cw = probe.offsetWidth; snap.ch = probe.offsetHeight; }
+
+    // Соседей рисуем по кругу начиная со следующего за мной — тем же порядком и читаем
+    var kids = seatsEl.children;
+    for (i = 0; i < kids.length && i < n - 1; i++) snap.seats[(me + i + 1) % n] = pointOf(kids[i]);
+    snap.seats[me] = pointOf(handEl);
+    return snap;
+  }
+
+  /* ---------- Что и куда полетит ---------- */
+
+  function fly(html, id, w, h, from, to, dur, delay, ease, o0, o1) {
+    return { html: html, id: id, w: w, h: h, from: from, to: to,
+             dur: dur, delay: delay, ease: ease, o0: o0, o1: o1 };
+  }
+  function at(p, s, rot) { return { cx: p.cx, cy: p.cy, s: s, rot: rot || 0 }; }
+
+  // Раздача: свои карты веером из колоды, соперникам — по паре рубашек
+  function planDeal(B) {
+    var plan = [], id, b, i = 0, k, q, p, seat;
+    if (!B.deck) return plan;
+    for (id in B.cards) {
+      if (!B.cards.hasOwnProperty(id)) continue;
+      b = B.cards[id];
+      if (b.zone !== 'hand') continue;
+      plan.push(fly(b.html, id, b.w, b.h, at(B.deck, 0.8, 0), at(b, 1, b.rot),
+                    FX_DEAL, i * FX_STEP, EASE_OUT, 0.35, 1));
+      i++;
+    }
+    for (k = 1; k < B.hands.length; k++) {
+      p = (me + k) % B.hands.length;
+      seat = B.seats[p];
+      if (!seat || !B.hands[p]) continue;
+      for (q = 0; q < 2; q++) {
+        plan.push(fly('<div class="card back"></div>', null, B.cw, B.ch,
+                      at(B.deck, 0.9, 0), at(seat, 0.55, 0),
+                      FX_DRAW, (k - 1) * FX_STEP + q * 24, EASE_OUT, 1, 0));
+      }
+    }
+    return plan;
+  }
+
+  function planDiff(A, B, from) {
+    var plan = [], id, a, b, i, k, q, src, seat;
+    var n = Math.min(A.hands.length, B.hands.length);
+    var growth = [], grewP = null, grewMax = 0, shrankP = null;
+    for (i = 0; i < n; i++) {
+      growth.push(B.hands[i] - A.hands[i]);
+      if (growth[i] > grewMax) { grewMax = growth[i]; grewP = i; }
+      if (growth[i] < 0 && (shrankP === null || i !== me)) shrankP = i;
+    }
+    var discardGrew = B.discard > A.discard;
+    var tableGone = A.table - B.table;
+    // Стол уехал, а бито не выросло — значит, кто-то забрал карты себе
+    var taker = (!discardGrew && tableGone > 0 && grewP !== null) ? grewP : null;
+
+    // 1. Карта видна и до, и после: переехала (ход, отбой, взял со стола)
+    // 2. Карта появилась: из руки соперника на стол или из колоды в мою руку
+    for (id in B.cards) {
+      if (!B.cards.hasOwnProperty(id)) continue;
+      b = B.cards[id];
+      a = A.cards[id];
+      // Карту бросили пальцем на стол — пусть летит оттуда, где отпустили, а не из веера
+      if (from && from.id === id && b.zone !== 'hand') { a = from.box; fxFrom = null; }
+      if (a) {
+        // Веер в руке сам подбирается, когда карт становится меньше. Это было мгновенно
+        // и до анимаций — пусть таким и остаётся: иначе на каждый ход половина руки
+        // пропадала бы на две десятых секунды, ровно когда по ней хотят попасть пальцем.
+        if (a.zone === 'hand' && b.zone === 'hand') continue;
+        if (Math.abs(a.cx - b.cx) > 6 || Math.abs(a.cy - b.cy) > 6 || Math.abs(a.w - b.w) > 2) {
+          plan.push(fly(b.html, id, b.w, b.h, at(a, b.w ? a.w / b.w : 1, a.rot), at(b, 1, b.rot),
+                        FX_MOVE, 0, EASE_OUT, 1, 1));
+        }
+        continue;
+      }
+      if (b.zone === 'table') {
+        k = (shrankP !== null) ? shrankP : (b.isDef ? A.def : A.atk);
+        src = (k !== null && k >= 0 && k < n) ? A.seats[k] : null;
+        plan.push(src
+          ? fly(b.html, id, b.w, b.h, at(src, 0.75, 0), at(b, 1, b.rot), FX_MOVE, 0, EASE_OUT, 0.3, 1)
+          // откуда пришла — непонятно; тогда хотя бы проявляем на месте, а не подкидываем рывком
+          : fly(b.html, id, b.w, b.h, at(b, 0.86, b.rot), at(b, 1, b.rot), FX_MOVE, 0, EASE_OUT, 0.2, 1));
+      } else if (b.zone === 'hand' && A.deck) {
+        plan.push(fly(b.html, id, b.w, b.h, at(A.deck, 0.8, 0), at(b, 1, b.rot),
+                      FX_DRAW, FX_WAIT, EASE_OUT, 0.35, 1));
+      }
+    }
+
+    // 3. Карта пропала с экрана: ушла в бито, к забравшему или из колоды в чужую руку
+    var goneT = [], goneD = [];
+    for (id in A.cards) {
+      if (!A.cards.hasOwnProperty(id) || B.cards[id]) continue;
+      a = A.cards[id];
+      if (a.zone === 'table') goneT.push(a);
+      else if (a.zone === 'deck') goneD.push(a);
+    }
+    var tgt = discardGrew ? B.pile : (taker !== null ? B.seats[taker] : null);
+    for (i = 0; i < goneT.length; i++) plan.push(gone(goneT[i], tgt, i));
+    tgt = (grewP !== null && grewMax > 0) ? B.seats[grewP] : null;
+    for (i = 0; i < goneD.length; i++) plan.push(gone(goneD[i], tgt, i));
+
+    // 4. Добор соперникам — рубашками из колоды. Свои карты уже улетели выше.
+    if (A.deckLen > B.deckLen && A.deck) {
+      for (i = 0; i < n; i++) {
+        if (i === me) continue;
+        k = growth[i] - (i === taker ? tableGone : 0);
+        seat = B.seats[i];
+        if (k <= 0 || !seat) continue;
+        for (q = 0; q < Math.min(2, k); q++) {
+          plan.push(fly('<div class="card back"></div>', null, B.cw, B.ch,
+                        at(A.deck, 0.9, 0), at(seat, 0.55, 0),
+                        FX_DRAW, FX_WAIT + q * 30, EASE_OUT, 1, 0));
+        }
+      }
+    }
+    return plan;
+  }
+
+  function gone(a, tgt, k) {
+    var delay = Math.min(k, 5) * 16;
+    if (!tgt) {
+      return fly(a.html, null, a.w, a.h, at(a, 1, a.rot), at(a, 0.86, a.rot),
+                 FX_GONE, delay, EASE_IN, 1, 0);
+    }
+    return fly(a.html, null, a.w, a.h, at(a, 1, a.rot), at(tgt, 0.5, a.rot),
+               FX_GONE, delay, EASE_IN, 1, 0);
+  }
+
+  /* ---------- Запуск и уборка ---------- */
+
+  function runFx(now) {
+    if (!now) { clearFx(); fxPrev = null; return; }
+    // В сети между броском и ответом стола проходит лишняя перерисовка, поэтому точку
+    // отпускания держим до тех пор, пока карта не окажется на столе. Но не вечно.
+    if (fxFrom && Date.now() - fxFrom.t > 900) fxFrom = null;
+    var prev = fxPrev, plan;
+    if (fxDeal) { fxDeal = false; fxFrom = null; plan = planDeal(now); }
+    else plan = prev ? planDiff(prev, now, fxFrom) : [];
+    fxPrev = now;
+    if (!plan.length) { reflag(); return; }   // на экране ничего не изменилось — не мешаем полёту
+    clearFx();
+    playFx(plan);
+  }
+
+  function tf(p, w, h) {
+    return 'translate(' + (p.cx - w / 2).toFixed(1) + 'px,' + (p.cy - h / 2).toFixed(1) + 'px)' +
+           ' rotate(' + p.rot.toFixed(1) + 'deg) scale(' + p.s.toFixed(3) + ')';
+  }
+
+  // Копия должна выглядеть ровно как карта, на место которой она садится, — иначе в момент
+  // подмены мигнёт рамка. Снимаем только то, что относится к самому полёту и к жесту.
+  var FX_STRIP = ['fx-hide', 'dragging', 'bad'];
+
+  function playFx(plan) {
+    if (!fxLayer) return;
+    var box = document.createElement('div'), made = [], i, j, it, g, end, last = 0;
+    for (i = 0; i < plan.length; i++) {
+      it = plan[i];
+      box.innerHTML = it.html;
+      g = box.firstChild;
+      if (!g || !g.classList) continue;
+      for (j = 0; j < FX_STRIP.length; j++) g.classList.remove(FX_STRIP[j]);
+      g.removeAttribute('data-id');
+      g.style.setProperty('--cw', it.w + 'px');
+      g.style.setProperty('--ch', it.h + 'px');
+      g.style.removeProperty('--rot');
+      g.style.transition = 'none';
+      g.style.opacity = String(it.o0);
+      g.style.transform = tf(it.from, it.w, it.h);
+      fxLayer.appendChild(g);
+      made.push({ el: g, it: it });
+      if (it.id) hideCard(it.id);
+      end = it.delay + it.dur;
+      if (end > last) last = end;
+    }
+    if (!made.length) return;
+    void fxLayer.offsetWidth;                    // один пересчёт на всю пачку, а не на карту
+    for (i = 0; i < made.length; i++) {
+      it = made[i].it;
+      g = made[i].el;
+      g.style.transition = 'transform ' + it.dur + 'ms ' + it.ease + ' ' + it.delay + 'ms,' +
+                           ' opacity ' + it.dur + 'ms linear ' + it.delay + 'ms';
+      g.style.transform = tf(it.to, it.w, it.h);
+      g.style.opacity = String(it.o1);
+    }
+    fxTimer = setTimeout(clearFx, last + 70);
+  }
+
+  function cardEl(id) {
+    var els = gameScreenEl.querySelectorAll('.card[data-id]'), i;
+    for (i = 0; i < els.length; i++) if (els[i].getAttribute('data-id') === id) return els[i];
+    return null;
+  }
+
+  function hideCard(id) {
+    // Карту, которую сейчас держат пальцем, прятать нельзя ни при каких обстоятельствах
+    if (drag && drag.moved && drag.id === id) return;
+    var el = cardEl(id);
+    if (!el) return;
+    el.classList.add('fx-hide');
+    fxHidden.push(id);
+  }
+
+  // Экран перерисовали, а копии ещё летят — вернуть настоящим картам невидимость
+  function reflag() {
+    var i, el;
+    for (i = 0; i < fxHidden.length; i++) {
+      el = cardEl(fxHidden[i]);
+      if (el) el.classList.add('fx-hide');
     }
   }
 
-  window.addEventListener('resize', function () { if (state) layoutHand(); });
+  function clearFx() {
+    if (fxTimer) { clearTimeout(fxTimer); fxTimer = null; }
+    if (fxLayer) fxLayer.innerHTML = '';
+    var i, el;
+    for (i = 0; i < fxHidden.length; i++) {
+      el = cardEl(fxHidden[i]);
+      if (el) el.classList.remove('fx-hide');
+    }
+    fxHidden = [];
+  }
+
+  /* ======================================================================
+     ПЕРЕТАСКИВАНИЕ КАРТ
+     ----------------------------------------------------------------------
+     Мышь, палец и стилус — один код на Pointer Events, без раздельных веток.
+
+     Тап не трогаем вообще: пока палец не сдвинулся дальше порога, мы ни во
+     что не вмешиваемся и обычный click отрабатывает как раньше. Как только
+     сдвинулся — это уже перетаскивание, и тогда следом идущий click глотаем,
+     иначе ход уйдёт дважды.
+     ====================================================================== */
+
+  var DRAG_SLOP = 7;          // сдвиг в пикселях, после которого это уже жест, а не тап
+  var drag = null;
+  var dropRect = null;        // куда можно бросить — сукно стола, координаты окна
+  var suppressClick = false;
+  var suppressT = null;
+
+  function armSuppress() {
+    suppressClick = true;
+    clearTimeout(suppressT);
+    suppressT = setTimeout(function () { suppressClick = false; }, 400);
+  }
+  function clearSuppress() {
+    suppressClick = false;
+    clearTimeout(suppressT);
+  }
+
+  // Ловим click раньше обработчика тапа: перехват стоит на фазе погружения
+  handEl.addEventListener('click', function (e) {
+    if (!suppressClick) return;
+    clearSuppress();
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+
+  function findHandCard(id) {
+    var kids = handEl.children, i;
+    for (i = 0; i < kids.length; i++) {
+      if (kids[i].getAttribute && kids[i].getAttribute('data-id') === id) return kids[i];
+    }
+    return null;
+  }
+
+  function inBox(x, y, r) {
+    return !!r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
+  handEl.addEventListener('pointerdown', function (e) {
+    if (drag) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    var el = (e.target && e.target.closest) ? e.target.closest('.card') : null;
+    if (!el || el.parentNode !== handEl) return;
+    if (!state || state.over || pending) return;
+    if (D.actorOf(state) !== me) return;              // не наш ход — страница живёт как жила
+    var id = el.getAttribute('data-id');
+    if (!id) return;
+
+    clearSuppress();
+    drag = {
+      id: id, pid: e.pointerId, el: el, touch: e.pointerType !== 'mouse',
+      sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY,
+      tx: 0, ty: 0, gx: 0, gy: 0, gxF: null, gyF: null, lift: 0, base: null,
+      moved: false, ok: false, over: false
+    };
+    window.addEventListener('pointermove', onDragMove, true);
+    window.addEventListener('pointerup', onDragUp, true);
+    window.addEventListener('pointercancel', onDragCancel, true);
+  });
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+  /* Положение карты БЕЗ преобразований — от него и считаем сдвиг под палец.
+     Замерять приходится не один раз: карта в руке меняет размер, когда карт
+     становится меньше и они перестают налезать друг на друга. Поэтому место
+     хвата держим долей от карты, а не пикселями, — иначе после перезамера
+     карта прыгнет относительно пальца. */
+  function measureBase(el) {
+    var save = el.style.transform;
+    el.style.transition = 'none';
+    el.style.transform = 'none';
+    var r = el.getBoundingClientRect();
+    el.style.transform = save;
+    drag.base = { left: r.left, top: r.top, w: r.width, h: r.height };
+    if (drag.gxF === null) {
+      drag.gxF = clamp01((drag.sx - r.left) / (r.width || 1));
+      drag.gyF = clamp01((drag.sy - r.top) / (r.height || 1));
+    }
+    drag.gx = drag.gxF * drag.base.w;
+    drag.gy = drag.gyF * drag.base.h;
+    // Палец закрывает карту — поднимаем её над пальцем, как в мобильных карточных играх.
+    // Просвет под нижним краем получается одинаковый, за какое бы место карту ни взяли.
+    drag.lift = drag.touch ? Math.round(drag.base.h - drag.gy + 30) : 0;
+  }
+
+  function startDrag() {
+    var el = drag.el;
+    if (!el || el.parentNode !== handEl) return false;
+    measureBase(el);
+    drag.moved = true;
+    refreshOk();
+    suppressClick = true;               // пока тащим, никакой click проскочить не должен
+    clearTimeout(suppressT);
+    el.classList.add('dragging');
+    // Захват вешаем на саму руку, а не на карту: перерисовка карту заменит, а руку — нет
+    try { handEl.setPointerCapture(drag.pid); } catch (err) { }
+    dropRect = middleEl.getBoundingClientRect();
+    return true;
+  }
+
+  function moveDrag(px, py) {
+    var el = drag.el;
+    drag.px = px;
+    drag.py = py;
+    if (!el || !drag.base) return;
+    drag.tx = px - drag.gx - drag.base.left;
+    drag.ty = py - drag.gy - drag.base.top - drag.lift;
+    el.style.transition = 'none';
+    el.style.transform = 'translate(' + drag.tx.toFixed(1) + 'px,' + drag.ty.toFixed(1) + 'px)';
+    paintDrop();
+  }
+
+  // Целимся и пальцем, и самой картой — так промахнуться труднее
+  function dragHit() {
+    if (!drag || !drag.base || !dropRect) return false;
+    if (inBox(drag.px, drag.py, dropRect)) return true;
+    return inBox(drag.base.left + drag.tx + drag.base.w / 2,
+                 drag.base.top + drag.ty + drag.base.h / 2, dropRect);
+  }
+
+  // Что можно, пересчитываем не на каждом движении пальца, а только когда
+  // изменилось состояние партии — то есть в перерисовке.
+  function refreshOk() {
+    if (drag) drag.ok = canPlayNow(drag.id);
+  }
+
+  function paintDrop() {
+    if (!drag || !drag.moved) return;
+    drag.over = dragHit();
+    middleEl.classList.toggle('drop-ok', drag.over && drag.ok);
+    middleEl.classList.toggle('drop-no', drag.over && !drag.ok);
+    middleEl.classList.toggle('drop-tr', transferMode);
+    if (drag.el) drag.el.classList.toggle('bad', !drag.ok);
+  }
+
+  function onDragMove(e) {
+    if (!drag || e.pointerId !== drag.pid) return;
+    if (!drag.moved) {
+      if (Math.abs(e.clientX - drag.sx) < DRAG_SLOP && Math.abs(e.clientY - drag.sy) < DRAG_SLOP) return;
+      if (!startDrag()) { endDrag(true); return; }
+    }
+    moveDrag(e.clientX, e.clientY);
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function onDragUp(e) {
+    if (!drag || e.pointerId !== drag.pid) return;
+    if (!drag.moved) { endDrag(true); return; }      // это был тап — click отработает сам
+    var ok = drag.ok && dragHit();
+    var id = drag.id, el = drag.el, r;
+    if (ok && el) {
+      r = el.getBoundingClientRect();
+      // карта полетит на стол оттуда, где её отпустили, а не из веера
+      if (r.width) fxFrom = { id: id, t: Date.now(),
+                              box: { cx: r.left + r.width / 2, cy: r.top + r.height / 2,
+                                     w: r.width, h: r.height, rot: 0 } };
+    }
+    endDrag(ok);
+    if (ok) playCard(id);
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function onDragCancel(e) {
+    // системное прерывание, звонок, свайп ОС — карта возвращается в руку
+    if (!drag || e.pointerId !== drag.pid) return;
+    endDrag(false);
+  }
+
+  // instant = карту возвращать не нужно: либо она ушла на стол, либо жеста не было
+  function endDrag(instant) {
+    var d = drag;
+    drag = null;
+    window.removeEventListener('pointermove', onDragMove, true);
+    window.removeEventListener('pointerup', onDragUp, true);
+    window.removeEventListener('pointercancel', onDragCancel, true);
+    middleEl.classList.remove('drop-ok');
+    middleEl.classList.remove('drop-no');
+    middleEl.classList.remove('drop-tr');
+    dropRect = null;
+    if (!d) return;
+    try {
+      if (handEl.hasPointerCapture && handEl.hasPointerCapture(d.pid)) handEl.releasePointerCapture(d.pid);
+    } catch (err) { }
+    // Жест был — значит, следом браузер может прислать click. Его глотаем.
+    if (d.moved) armSuppress(); else clearSuppress();
+    var el = d.el;
+    if (!el || el.parentNode !== handEl) return;
+    el.classList.remove('bad');
+    if (instant || animOff()) {
+      el.style.transition = 'none';
+      el.style.transform = '';
+      el.classList.remove('dragging');
+      requestAnimationFrame(function () { el.style.transition = ''; });
+      return;
+    }
+    el.style.transition = 'transform 170ms ' + EASE_OUT;
+    el.style.transform = '';
+    setTimeout(function () {
+      el.classList.remove('dragging');
+      el.style.transition = '';
+    }, 190);
+  }
+
+  // Экран перерисовали посреди жеста: карта в руке — та же, а элемент уже другой
+  function dragRelink() {
+    if (!drag) return;
+    refreshOk();
+    var el = findHandCard(drag.id);
+    if (!el) { drag.el = null; endDrag(true); return; }
+    if (el === drag.el) { paintDrop(); return; }
+    drag.el = el;
+    if (!drag.moved) return;
+    el.classList.add('dragging');
+    measureBase(el);
+    dropRect = middleEl.getBoundingClientRect();
+    moveDrag(drag.px, drag.py);
+    try { handEl.setPointerCapture(drag.pid); } catch (err) { }
+  }
+
+  window.addEventListener('resize', function () {
+    if (!state) return;
+    layoutHand();
+    // Все запомненные точки съехали — начинаем отсчёт заново, без полётов в пустоту
+    clearFx();
+    fxPrev = fxOn() ? fxSnap() : null;
+    if (drag && drag.moved && drag.el && drag.el.parentNode === handEl) {
+      measureBase(drag.el);
+      dropRect = middleEl.getBoundingClientRect();
+      moveDrag(drag.px, drag.py);
+    }
+  });
 
   /* ======================================================================
      ИТОГ ПАРТИИ
@@ -682,12 +1280,41 @@
 
   var optPod = $('opt-pod'), optPer = $('opt-per'), segEl = $('seg-players');
   var frPod = $('fr-pod'), frPer = $('fr-per');
+  var diffEl = $('seg-diff'), frDiffEl = $('seg-fr-diff');
+
+  // Что бот умеет на каждом уровне — человеку словами, без чисел
+  var DIFF_HINT = [
+    'Играет разумно, но карт не считает и время от времени ошибается.',
+    'Смотрит на весь стол: кому подкинуть, кто близок к выходу. Но что уже вышло — не помнит.',
+    'Считает вышедшие карты и играет в полную силу. За большим столом действует заодно с соседями.'
+  ];
 
   function syncModeName() {
     var mk = D.modeKey(store.settings);
     $('mode-name').textContent = D.MODE_NAME[mk];
     $('fr-mode').textContent = D.MODE_NAME[mk];
   }
+
+  function syncDiff() {
+    var d = store.settings.diff, i, btns;
+    btns = diffEl.children;
+    for (i = 0; i < btns.length; i++) btns[i].classList.toggle('on', +btns[i].getAttribute('data-d') === d);
+    btns = frDiffEl.children;
+    for (i = 0; i < btns.length; i++) btns[i].classList.toggle('on', +btns[i].getAttribute('data-d') === d);
+    $('diff-hint').textContent = DIFF_HINT[d];
+    $('fr-diff-hint').textContent = DIFF_HINT[d];
+  }
+
+  function onDiffClick(e) {
+    var b = e.target.closest ? e.target.closest('.seg-b') : null;
+    if (!b) return;
+    store.settings.diff = D.normDiff(+b.getAttribute('data-d'));
+    saveStore();
+    syncDiff();
+  }
+
+  diffEl.addEventListener('click', onDiffClick);
+  frDiffEl.addEventListener('click', onDiffClick);
 
   // Число игроков — только для офлайна: в сетевом лобби состав живой
   function syncPlayers() {
@@ -748,6 +1375,8 @@
   function toMenu() {
     stopBot();
     closeNet();
+    endDrag(true);
+    resetFx(false);
     state = null;
     netLegal = null;
     $('overlay').classList.add('hidden');
@@ -884,7 +1513,11 @@
       pid: store.playerId,
       nick: store.nick,
       host: !!opt.host,
-      rules: { podkidnoy: store.settings.podkidnoy, perevodnoy: store.settings.perevodnoy },
+      rules: {
+        podkidnoy: store.settings.podkidnoy,
+        perevodnoy: store.settings.perevodnoy,
+        diff: store.settings.diff            // уровень ботов, которыми хост добьёт состав
+      },
       on: {
         lobby: onNetLobby,
         view: onNetView,
@@ -941,8 +1574,9 @@
     if (v.gen !== netGen) {           // за столом началась новая партия
       netGen = v.gen;
       recorded = false;
-      seen = {};
       transferMode = false;
+      endDrag(true);
+      resetFx(true);
       $('overlay').classList.add('hidden');
     }
     state = N.stateFromView(v);
@@ -1008,9 +1642,13 @@
     if (!l) return;
     var members = l.members || [], n = members.length, max = l.max || 6, i;
 
+    var bots = 0;
+    for (i = 0; i < n; i++) if (members[i].kind === 'bot') bots++;
+
     $('lb-code').textContent = l.code;
     $('lb-mode').textContent = D.MODE_NAME[D.modeKey(l.rules)] + ' · ' + n + ' ' +
-      D.plural(n, 'участник', 'участника', 'участников') + ' из ' + max;
+      D.plural(n, 'участник', 'участника', 'участников') + ' из ' + max +
+      (bots ? ' · боты: ' + D.DIFF_NAME[D.normDiff(l.rules.diff)].toLowerCase() : '');
     $('lb-link').value = N.linkFor(l.code);
     $('lb-linkbox').classList.toggle('hidden', IS_FILE);
     $('lb-filenote').classList.toggle('hidden', !IS_FILE);
@@ -1033,9 +1671,6 @@
            '<span class="who">свободно</span><span class="tag">ждём</span></div>';
     }
     $('lb-seats').innerHTML = h;
-
-    var bots = 0;
-    for (i = 0; i < n; i++) if (members[i].kind === 'bot') bots++;
 
     $('lb-botrow').classList.toggle('hidden', !l.isHost);
     $('lb-bot-add').disabled = n >= max;
@@ -1166,6 +1801,11 @@
      ====================================================================== */
 
   document.addEventListener('visibilitychange', function () {
+    // Ушли со вкладки посреди жеста — карта возвращается в руку, ход не уходит.
+    // За курсором, уехавшим за край окна, следить отдельно не нужно: захват указателя
+    // висит на самой руке, поэтому pointerup дойдёт до нас откуда угодно, а системное
+    // прерывание придёт как pointercancel. Ловить ещё и blur — только зря рвать жест.
+    if (document.hidden) { endDrag(false); clearFx(); }
     // На телефонах сокет часто умирает молча, пока вкладка свёрнута
     if (!document.hidden && net) net.wake();
   });
@@ -1182,6 +1822,8 @@
   syncOpts();
   syncModeName();
   syncPlayers();
+  syncDiff();
+  applyAnimClass();
   syncWhoami();
   show('menu');
 
@@ -1203,6 +1845,17 @@
     get lobby() { return netLobby; },
     newGame: newGame,
     store: function () { return store; },
+    // Для автотестов: что сейчас летает и держим ли карту
+    fx: function () {
+      return {
+        on: fxOn(),
+        ghosts: fxLayer ? fxLayer.children.length : 0,
+        hidden: fxHidden.length,
+        stuck: gameScreenEl.querySelectorAll('.card.fx-hide').length,
+        dragging: !!(drag && drag.moved),
+        dragId: drag ? drag.id : null
+      };
+    },
     setNick: function (v) { store.nick = N.cleanNick(v); saveStore(); syncWhoami(); },
     startNet: startNet
   };
